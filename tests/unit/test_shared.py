@@ -34,6 +34,43 @@ def test_app_config_creates_data_directories(tmp_path: Path) -> None:
     assert cfg.sqlite_path == tmp_path / ".abyss-data" / "abyss.db"
 
 
+def test_create_app_defers_directory_creation_to_lifespan_and_fastapi_cli_works(
+    tmp_path: Path,
+) -> None:
+    import subprocess
+    import sys
+
+    from backend.app.main import create_app
+
+    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=tmp_path)
+    app = create_app(config=cfg)
+    assert not cfg.data_dir.exists()
+
+    with TestClient(app):
+        assert cfg.data_dir.is_dir()
+        assert cfg.sqlite_path.is_file()
+
+    fastapi_bin = Path(sys.executable).with_name("fastapi")
+    proc = subprocess.run([str(fastapi_bin), "--version"], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_llm_credentials_normalizes_endpoint_suffixes() -> None:
+    c1 = LLMCredentials(
+        base_url="http://localhost:8001/v1/chat/completions/",
+        model="qwen3.8-flash",
+        api_key="sk-test-123456",
+    )
+    assert c1.base_url == "http://localhost:8001/v1"
+
+    c2 = LLMCredentials(
+        base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models",
+        model="qwen3.8-flash",
+        api_key="sk-test-123456",
+    )
+    assert c2.base_url == "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+
+
 def test_domain_errors_expose_status_and_codes() -> None:
     assert LLMSettingsRequiredError().status_code == 428
     assert LLMSettingsRequiredError().code == "LLM_SETTINGS_REQUIRED"

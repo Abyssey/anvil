@@ -84,3 +84,93 @@ def test_reasoning_chat_openai_preserves_streaming_and_non_streaming_reasoning_c
     result = model._create_chat_result(response)
     reasoning = result.generations[0].message.additional_kwargs.get("reasoning_content")
     assert reasoning == "Step 2: verify"
+
+
+async def test_reasoning_chat_openai_falls_back_when_provider_rejects_enable_thinking() -> None:
+    import json
+
+    import httpx
+
+    calls: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content.decode("utf-8"))
+        calls.append(payload)
+        if "enable_thinking" in payload:
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "message": "Unrecognized request argument supplied: enable_thinking",
+                        "type": "invalid_request_error",
+                    }
+                },
+            )
+        if payload.get("stream"):
+            sse = (
+                'data: {"id":"c1","object":"chat.completion.chunk","model":"qwen3.8-flash",'
+                '"choices":[{"index":0,"delta":{"role":"assistant","content":"Stream ok"},'
+                '"finish_reason":null}]}\n\n'
+                'data: {"id":"c1","object":"chat.completion.chunk","model":"qwen3.8-flash",'
+                '"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
+                "data: [DONE]\n\n"
+            )
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=sse.encode("utf-8"),
+            )
+        return httpx.Response(
+            200,
+            json={
+                "id": "c0",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": "qwen3.8-flash",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Invoke ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    non_stream_model = ReasoningChatOpenAI(
+        model="qwen3.8-flash",
+        base_url="http://localhost:8001/v1",
+        api_key="sk-test-key",  # type: ignore[arg-type]
+        max_retries=0,
+        streaming=False,
+        extra_body={"enable_thinking": True},
+        http_client=httpx.Client(trust_env=False),
+        http_async_client=httpx.AsyncClient(transport=transport, trust_env=False),
+    )
+    msg = await non_stream_model.ainvoke("hello")
+    assert msg.content == "Invoke ok"
+    assert len(calls) == 2
+    assert "enable_thinking" in calls[0]
+    assert "enable_thinking" not in calls[1]
+
+    stream_model = ReasoningChatOpenAI(
+        model="qwen3.8-flash",
+        base_url="http://localhost:8001/v1",
+        api_key="sk-test-key",  # type: ignore[arg-type]
+        max_retries=0,
+        streaming=True,
+        extra_body={"enable_thinking": True},
+        http_client=httpx.Client(trust_env=False),
+        http_async_client=httpx.AsyncClient(transport=transport, trust_env=False),
+    )
+    streamed = "".join(
+        c.content
+        for c in [chunk async for chunk in stream_model.astream("hello again")]
+        if isinstance(c.content, str)
+    )
+    assert streamed == "Stream ok"
+    assert len(calls) == 4
+    assert "enable_thinking" in calls[2]
+    assert "enable_thinking" not in calls[3]
+    assert stream_model.extra_body is None

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -135,6 +136,16 @@ class ArtifactStore:
         if path.is_file():
             path.unlink()
 
+    def delete_session_artifacts(self, session_id: str) -> None:
+        safe_id = Path(session_id).name
+        target = (self._root / safe_id).resolve()
+        try:
+            target.relative_to(self._root)
+        except ValueError as exc:
+            raise PathEscapeError(session_id) from exc
+        if target != self._root and target.is_dir():
+            shutil.rmtree(target)
+
     def save_to_workspace(
         self,
         session_id: str,
@@ -165,8 +176,12 @@ class ArtifactStore:
         for item in todos:
             content = str(item.get("content") or "").strip()
             status = str(item.get("status") or "pending").lower()
-            marker = "x" if status == "completed" else ("/" if status == "in_progress" else " ")
-            lines.append(f"- [{marker}] {content}")
+            if status == "completed":
+                lines.append(f"- [x] {content}")
+            elif status == "in_progress":
+                lines.append(f"- [ ] **(In Progress)** {content}")
+            else:
+                lines.append(f"- [ ] {content}")
         return "\n".join(lines).rstrip() + "\n"
 
     @staticmethod

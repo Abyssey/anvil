@@ -13,7 +13,7 @@ import { CodeBlock } from "@astryxdesign/core/CodeBlock";
 import { Collapsible } from "@astryxdesign/core/Collapsible";
 import { Heading } from "@astryxdesign/core/Heading";
 import { Markdown } from "@astryxdesign/core/Markdown";
-import { VStack } from "@astryxdesign/core/Stack";
+import { HStack, VStack } from "@astryxdesign/core/Stack";
 import { Text } from "@astryxdesign/core/Text";
 import type { ToolCallRecord } from "../../api/types";
 import { useWorkspace } from "../../state/workspaceContext";
@@ -78,25 +78,62 @@ export function MessageStream() {
     </VStack>
   );
 
-  const hasContent = state.messages.length > 0 || state.streamingAssistant !== null;
+  const pending = state.activeSession?.pending_interrupt;
+  const showInlinePlanReview =
+    pending?.kind === "plan_review" && state.rightDrawerTab !== "artifacts";
+  const hasContent =
+    state.messages.length > 0 || state.streamingAssistant !== null || Boolean(pending);
 
   return (
-    <ChatLayout density="balanced" composer={<Composer />} emptyState={!hasContent ? emptyState : undefined}>
-      <ChatMessageList isStreaming={state.isStreaming} emptyState={!hasContent ? emptyState : undefined}>
-        {state.messages.map((msg) =>
-          msg.role === "user" ? (
-            <ChatMessage key={msg.id} sender="user">
-              <ChatMessageBubble>{msg.content}</ChatMessageBubble>
-            </ChatMessage>
-          ) : (
-            <ChatMessage
-              key={msg.id}
-              sender="assistant"
-              avatar={<Avatar name="Abyss" size="sm" />}
-            >
-              {msg.thinking && (
+    <ChatLayout
+      density="balanced"
+      composer={<Composer />}
+      emptyState={!hasContent ? emptyState : undefined}
+    >
+      {hasContent ? (
+        <ChatMessageList isStreaming={state.isStreaming}>
+          {state.messages.map((msg) =>
+            msg.role === "user" ? (
+              <ChatMessage key={msg.id} sender="user">
+                <ChatMessageBubble>{msg.content}</ChatMessageBubble>
+              </ChatMessage>
+            ) : (
+              <ChatMessage
+                key={msg.id}
+                sender="assistant"
+                avatar={<Avatar name="Abyss" size="sm" />}
+              >
+                {msg.thinking && (
+                  <Collapsible
+                    defaultIsOpen={false}
+                    trigger={
+                      <Text type="label" color="secondary">
+                        Thinking
+                      </Text>
+                    }
+                  >
+                    <ChatMessageBubble variant="ghost">
+                      <Markdown density="compact">{msg.thinking}</Markdown>
+                    </ChatMessageBubble>
+                  </Collapsible>
+                )}
+                {Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0 && (
+                  <ChatToolCalls calls={toChatToolCalls(msg.tool_calls)} />
+                )}
+                {msg.content && (
+                  <ChatMessageBubble variant="ghost">
+                    <Markdown density="compact">{msg.content}</Markdown>
+                  </ChatMessageBubble>
+                )}
+              </ChatMessage>
+            ),
+          )}
+
+          {state.streamingAssistant && (
+            <ChatMessage sender="assistant" avatar={<Avatar name="Abyss" size="sm" />}>
+              {state.streamingAssistant.thinking && (
                 <Collapsible
-                  defaultIsOpen={false}
+                  defaultIsOpen
                   trigger={
                     <Text type="label" color="secondary">
                       Thinking
@@ -104,58 +141,68 @@ export function MessageStream() {
                   }
                 >
                   <ChatMessageBubble variant="ghost">
-                    <Markdown density="compact">{msg.thinking}</Markdown>
+                    <Markdown density="compact" isStreaming>
+                      {state.streamingAssistant.thinking}
+                    </Markdown>
                   </ChatMessageBubble>
                 </Collapsible>
               )}
-              {msg.tool_calls.length > 0 && (
-                <ChatToolCalls calls={toChatToolCalls(msg.tool_calls)} />
+              {state.streamingAssistant.toolCalls.length > 0 && (
+                <ChatToolCalls
+                  defaultIsExpanded
+                  calls={toChatToolCalls(state.streamingAssistant.toolCalls)}
+                />
               )}
-              {msg.content && (
+              {state.streamingAssistant.content && (
                 <ChatMessageBubble variant="ghost">
-                  <Markdown density="compact">{msg.content}</Markdown>
+                  <Markdown density="compact" isStreaming>
+                    {state.streamingAssistant.content}
+                  </Markdown>
                 </ChatMessageBubble>
               )}
             </ChatMessage>
-          ),
-        )}
+          )}
 
-        {state.streamingAssistant && (
-          <ChatMessage sender="assistant" avatar={<Avatar name="Abyss" size="sm" />}>
-            {state.streamingAssistant.thinking && (
-              <Collapsible
-                defaultIsOpen
-                trigger={
-                  <Text type="label" color="secondary">
-                    Thinking
-                  </Text>
-                }
-              >
-                <ChatMessageBubble variant="ghost">
-                  <Markdown density="compact" isStreaming>
-                    {state.streamingAssistant.thinking}
-                  </Markdown>
-                </ChatMessageBubble>
-              </Collapsible>
-            )}
-            {state.streamingAssistant.toolCalls.length > 0 && (
-              <ChatToolCalls
-                defaultIsExpanded
-                calls={toChatToolCalls(state.streamingAssistant.toolCalls)}
-              />
-            )}
-            {state.streamingAssistant.content && (
-              <ChatMessageBubble variant="ghost">
-                <Markdown density="compact" isStreaming>
-                  {state.streamingAssistant.content}
-                </Markdown>
-              </ChatMessageBubble>
-            )}
-          </ChatMessage>
-        )}
+          {showInlinePlanReview && (
+            <Banner
+              status="info"
+              collapsible={false}
+              title="Plan ready for review"
+              description={
+                pending.summary ?? "Open the implementation plan to review or proceed."
+              }
+            >
+              <HStack gap={2} hAlign="end">
+                <Button
+                  label="Open Plan"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    actions.setActiveArtifactTab("implementation_plan");
+                    actions.openRightDrawer("artifacts");
+                  }}
+                />
+                <Button
+                  label="Cancel"
+                  variant="ghost"
+                  size="sm"
+                  isDisabled={state.isStreaming}
+                  onClick={() => void actions.resumeInterrupt("deny")}
+                />
+                <Button
+                  label="Proceed"
+                  variant="primary"
+                  size="sm"
+                  isDisabled={state.isStreaming}
+                  onClick={() => void actions.resumeInterrupt("approve")}
+                />
+              </HStack>
+            </Banner>
+          )}
 
-        <ShellApprovalCard />
-      </ChatMessageList>
+          <ShellApprovalCard />
+        </ChatMessageList>
+      ) : null}
     </ChatLayout>
   );
 }

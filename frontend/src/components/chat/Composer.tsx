@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChatComposer, ChatComposerInput } from "@astryxdesign/core/Chat";
+import { ChatComposer } from "@astryxdesign/core/Chat";
 import { SegmentedControl, SegmentedControlItem } from "@astryxdesign/core/SegmentedControl";
 import type { RunMode } from "../../api/types";
 import { useWorkspace } from "../../state/workspaceContext";
@@ -30,18 +30,9 @@ export function Composer() {
       onSubmit={handleSubmit}
       onStop={actions.stopStream}
       isStopShown={state.isStreaming}
-      isDisabled={hasPendingInterrupt}
+      isDisabled={hasPendingInterrupt || state.isStreaming}
       placeholder={PLACEHOLDER_BY_MODE[state.mode]}
       status={state.streamError ? { type: "error", message: state.streamError } : undefined}
-      input={
-        <ChatComposerInput
-          value={draft}
-          onChange={setDraft}
-          onSubmit={handleSubmit}
-          placeholder={PLACEHOLDER_BY_MODE[state.mode]}
-          isDisabled={hasPendingInterrupt}
-        />
-      }
       footerActions={
         <SegmentedControl
           label="Execution mode"

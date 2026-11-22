@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
 import httpx
 import openai
+from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import BaseMessage
 from langchain_core.outputs import ChatGenerationChunk, ChatResult
 from langchain_openai import ChatOpenAI
 
@@ -31,6 +33,67 @@ def _extract_reasoning(obj: object) -> str | None:
 
 class ReasoningChatOpenAI(ChatOpenAI):
     """ChatOpenAI subclass preserving provider delta/message `reasoning_content`."""
+
+    def _disable_rejected_thinking(self, exc: BaseException) -> bool:
+        if not (isinstance(self.extra_body, Mapping) and "enable_thinking" in self.extra_body):
+            return False
+        lowered = str(exc).lower()
+        if "enable_thinking" not in lowered and "extra inputs" not in lowered:
+            return False
+        remaining = {k: v for k, v in self.extra_body.items() if k != "enable_thinking"}
+        self.extra_body = remaining or None
+        return True
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        try:
+            return await super()._agenerate(
+                messages, stop=stop, run_manager=run_manager, **kwargs
+            )
+        except openai.BadRequestError as exc:
+            if self._disable_rejected_thinking(exc):
+                return await super()._agenerate(
+                    messages, stop=stop, run_manager=run_manager, **kwargs
+                )
+            raise
+
+    async def _astream(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
+        *,
+        stream_usage: bool | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatGenerationChunk]:
+        emitted = False
+        try:
+            async for chunk in super()._astream(
+                messages,
+                stop=stop,
+                run_manager=run_manager,
+                stream_usage=stream_usage,
+                **kwargs,
+            ):
+                emitted = True
+                yield chunk
+        except openai.BadRequestError as exc:
+            if not emitted and self._disable_rejected_thinking(exc):
+                async for chunk in super()._astream(
+                    messages,
+                    stop=stop,
+                    run_manager=run_manager,
+                    stream_usage=stream_usage,
+                    **kwargs,
+                ):
+                    yield chunk
+                return
+            raise
 
     def _convert_chunk_to_generation_chunk(
         self,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -97,6 +98,7 @@ class SessionService:
 
     async def delete_session(self, session_id: str) -> None:
         await self._repo.delete_session(session_id)
+        self._artifact_store.delete_session_artifacts(session_id)
 
     async def stream_message(
         self,
@@ -185,50 +187,91 @@ class SessionService:
         tool_order: list[str] = []
         pending_interrupt: PendingInterrupt | None = None
         had_error = False
+        was_cancelled = False
 
-        async for h_event in raw_stream:
-            if h_event.event == "thinking":
-                text = str(h_event.data.get("text") or "")
-                thinking_parts.append(text)
-            elif h_event.event == "token":
-                text = str(h_event.data.get("text") or "")
-                token_parts.append(text)
-            elif h_event.event == "tool_start":
-                tc_id = str(h_event.data.get("id") or uuid.uuid4().hex[:8])
-                record = ToolCallRecord(
-                    id=tc_id,
-                    name=str(h_event.data.get("name") or ""),
-                    args=dict(h_event.data.get("args") or {})
-                    if isinstance(h_event.data.get("args"), dict)
-                    else {},
-                    status="running",
-                    subagent=h_event.data.get("subagent")
-                    if isinstance(h_event.data.get("subagent"), str)
-                    else None,
-                )
-                tool_map[tc_id] = record
-                tool_order.append(tc_id)
-            elif h_event.event == "tool_end":
-                tc_id = str(h_event.data.get("id") or "")
-                if tc_id in tool_map:
-                    tool_map[tc_id] = tool_map[tc_id].model_copy(
-                        update={
-                            "output": str(h_event.data.get("output") or ""),
-                            "status": str(h_event.data.get("status") or "success"),
-                        }
+        try:
+            async for h_event in raw_stream:
+                if h_event.event == "thinking":
+                    text = str(h_event.data.get("text") or "")
+                    thinking_parts.append(text)
+                elif h_event.event == "token":
+                    text = str(h_event.data.get("text") or "")
+                    token_parts.append(text)
+                elif h_event.event == "tool_start":
+                    tc_id = str(h_event.data.get("id") or uuid.uuid4().hex[:8])
+                    record = ToolCallRecord(
+                        id=tc_id,
+                        name=str(h_event.data.get("name") or ""),
+                        args=dict(h_event.data.get("args") or {})
+                        if isinstance(h_event.data.get("args"), dict)
+                        else {},
+                        status="running",
+                        subagent=h_event.data.get("subagent")
+                        if isinstance(h_event.data.get("subagent"), str)
+                        else None,
                     )
-            elif h_event.event == "interrupt":
-                pending_interrupt = PendingInterrupt.model_validate(h_event.data)
-            elif h_event.event == "diff_changed":
-                await self._refresh_walkthrough_plan(session.id, session.workspace_path)
-            elif h_event.event == "error":
-                had_error = True
+                    tool_map[tc_id] = record
+                    tool_order.append(tc_id)
+                elif h_event.event == "tool_end":
+                    tc_id = str(h_event.data.get("id") or "")
+                    if tc_id in tool_map:
+                        tool_map[tc_id] = tool_map[tc_id].model_copy(
+                            update={
+                                "output": str(h_event.data.get("output") or ""),
+                                "status": str(h_event.data.get("status") or "success"),
+                            }
+                        )
+                elif h_event.event == "interrupt":
+                    pending_interrupt = PendingInterrupt.model_validate(h_event.data)
+                elif h_event.event == "diff_changed":
+                    await self._refresh_walkthrough_plan(session.id, session.workspace_path)
+                elif h_event.event == "error":
+                    had_error = True
 
-            yield StreamEvent(event=h_event.event, data=dict(h_event.data))
+                yield StreamEvent(event=h_event.event, data=dict(h_event.data))
+        except (asyncio.CancelledError, GeneratorExit):
+            was_cancelled = True
+            raise
+        except Exception:
+            had_error = True
+            raise
+        finally:
+            await asyncio.shield(
+                self._finalize_stream(
+                    session=session,
+                    thinking_parts=thinking_parts,
+                    token_parts=token_parts,
+                    tool_map=tool_map,
+                    tool_order=tool_order,
+                    pending_interrupt=pending_interrupt,
+                    had_error=had_error,
+                    was_cancelled=was_cancelled,
+                )
+            )
 
+    async def _finalize_stream(
+        self,
+        *,
+        session: Session,
+        thinking_parts: list[str],
+        token_parts: list[str],
+        tool_map: dict[str, ToolCallRecord],
+        tool_order: list[str],
+        pending_interrupt: PendingInterrupt | None,
+        had_error: bool,
+        was_cancelled: bool,
+    ) -> None:
         content_text = "".join(token_parts).strip()
         thinking_text = "".join(thinking_parts).strip()
-        tools = [tool_map[tid] for tid in tool_order]
+        terminal_tool_status = (
+            "cancelled" if was_cancelled else ("error" if had_error else "success")
+        )
+        tools = [
+            tool_map[tid].model_copy(update={"status": terminal_tool_status})
+            if tool_map[tid].status == "running"
+            else tool_map[tid]
+            for tid in tool_order
+        ]
         if content_text or thinking_text or tools:
             await self._repo.append_message(
                 ChatMessage(
@@ -244,14 +287,14 @@ class SessionService:
 
         next_status = (
             SessionStatus.AWAITING_APPROVAL
-            if pending_interrupt is not None
-            else (SessionStatus.ERROR if had_error else SessionStatus.IDLE)
+            if pending_interrupt is not None and not was_cancelled
+            else (SessionStatus.ERROR if had_error and not was_cancelled else SessionStatus.IDLE)
         )
         await self._repo.update_session(
             session.model_copy(
                 update={
                     "status": next_status,
-                    "pending_interrupt": pending_interrupt,
+                    "pending_interrupt": pending_interrupt if not was_cancelled else None,
                 }
             )
         )

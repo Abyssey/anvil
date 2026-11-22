@@ -67,9 +67,11 @@ async def test_read_file_confinement_and_diff_hunks(tmp_path: Path) -> None:
     with pytest.raises(PathEscapeError):
         await inspector.read_file(str(tmp_path), "../outside_secret.txt")
 
-    # Mutate tracked file + add untracked file
+    # Mutate tracked file + add untracked file + add untracked file in new subdirectory
     (tmp_path / "src" / "app.py").write_text("line1\nline2_changed\nline3\n", encoding="utf-8")
     (tmp_path / "README.md").write_text("# New Doc\n", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "ONBOARDING.md").write_text("# Onboarding\n", encoding="utf-8")
 
     diff_result = await inspector.get_diff(str(tmp_path))
     paths = {f.path: f for f in diff_result.files}
@@ -77,3 +79,60 @@ async def test_read_file_confinement_and_diff_hunks(tmp_path: Path) -> None:
     assert len(paths["src/app.py"].hunks) >= 1
     assert "README.md" in paths
     assert paths["README.md"].status == "untracked"
+    assert "docs/ONBOARDING.md" in paths
+    assert "docs/" not in paths
+    assert "# Onboarding" in (paths["docs/ONBOARDING.md"].preview_content or "")
+
+
+@pytest.mark.asyncio
+async def test_ping_llm_falls_back_when_models_route_missing_and_redacts_api_key() -> None:
+    import httpx
+
+    from backend.app.shared.errors import LLMUpstreamError
+    from backend.app.shared.llm_credentials import LLMCredentials
+
+    seen_paths: list[tuple[str, str]] = []
+
+    def fallback_handler(request: httpx.Request) -> httpx.Response:
+        seen_paths.append((request.method, request.url.path))
+        if request.url.path.endswith("/models"):
+            return httpx.Response(404, json={"error": {"message": "models endpoint disabled"}})
+        if request.url.path.endswith("/chat/completions"):
+            return httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-ping",
+                    "object": "chat.completion",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "ok"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                },
+            )
+        return httpx.Response(500)
+
+    creds = LLMCredentials(
+        base_url="http://localhost:8001/v1",
+        model="qwen3.8-flash",
+        api_key="sk-ultra-secret-999",
+    )
+    inspector = WorkspaceInspector(http_transport=httpx.MockTransport(fallback_handler))
+    res = await inspector.ping_llm(creds)
+    assert res == {"ok": True, "base_url": "http://localhost:8001/v1", "model": "qwen3.8-flash"}
+    assert seen_paths == [("GET", "/v1/models"), ("POST", "/v1/chat/completions")]
+
+    def auth_error_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401,
+            json={"error": {"message": "Invalid bearer token sk-ultra-secret-999"}},
+        )
+
+    err_inspector = WorkspaceInspector(http_transport=httpx.MockTransport(auth_error_handler))
+    with pytest.raises(LLMUpstreamError) as exc_info:
+        await err_inspector.ping_llm(creds)
+    assert "401" in exc_info.value.message
+    assert "sk-ultra-secret-999" not in exc_info.value.message
+    assert "[REDACTED]" in exc_info.value.message

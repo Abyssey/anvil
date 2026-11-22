@@ -93,4 +93,47 @@ describe("apiClient SSE streaming and X-LLM headers", () => {
       { event: "done", data: { session_id: "s1" } },
     ]);
   });
+
+  it("normalizes /chat/completions in llmHeaders and reassembles split multi-byte UTF-8 SSE frames", async () => {
+    const headers = llmHeaders({
+      baseUrl: "http://localhost:8001/v1/chat/completions/",
+      model: "qwen3.8-flash",
+      apiKey: "sk-secret",
+      enableThinking: true,
+    });
+    expect(headers["X-LLM-Base-Url"]).toBe("http://localhost:8001/v1");
+
+    const fullBytes = new TextEncoder().encode(
+      'event: token\ndata: {"text":"온보딩 문서"}'
+    );
+    // Split right inside the 3-byte UTF-8 sequence for "온" (after "event: token\ndata: {\"text\":\"" = 28 bytes + 1 byte = 29)
+    const chunks = [fullBytes.slice(0, 29), fullBytes.slice(29)];
+    const stream = new ReadableStream<Uint8Array>({
+      start(ctrl) {
+        for (const chunk of chunks) {
+          ctrl.enqueue(chunk);
+        }
+        ctrl.close();
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(stream, { status: 200 })),
+    );
+
+    const received: StreamEvent[] = [];
+    await apiClient.streamSSE(
+      "/api/sessions/s1/messages/stream",
+      { content: "온보딩", mode: "ask" },
+      {
+        baseUrl: "http://localhost:8001/v1/chat/completions",
+        model: "qwen3.8-flash",
+        apiKey: "sk-test",
+        enableThinking: true,
+      },
+      new AbortController().signal,
+      (ev) => received.push(ev),
+    );
+    expect(received).toEqual([{ event: "token", data: { text: "온보딩 문서" } }]);
+  });
 });

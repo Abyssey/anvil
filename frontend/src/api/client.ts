@@ -10,7 +10,7 @@ import type {
   WorkspaceDiff,
   WorkspaceInfo,
 } from "./types";
-import type { LLMSettings } from "../state/settings";
+import { normalizeBaseUrl, type LLMSettings } from "../state/settings";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -25,7 +25,7 @@ export class ApiError extends Error {
 
 export function llmHeaders(settings: LLMSettings): Record<string, string> {
   return {
-    "X-LLM-Base-Url": settings.baseUrl.trim(),
+    "X-LLM-Base-Url": normalizeBaseUrl(settings.baseUrl),
     "X-LLM-Model": settings.model.trim(),
     "X-LLM-Api-Key": settings.apiKey.trim(),
     "X-LLM-Enable-Thinking": settings.enableThinking ? "true" : "false",
@@ -194,15 +194,7 @@ export const apiClient = {
       eventName = "message";
     };
 
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) {
-        break;
-      }
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split(/\r?\n/);
-      buffer = lines.pop() ?? "";
-
+    const consumeLines = (lines: string[]) => {
       for (const line of lines) {
         if (line === "") {
           flushEvent();
@@ -212,9 +204,21 @@ export const apiClient = {
           dataLines.push(line.slice(5).trimStart());
         }
       }
+    };
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        buffer += decoder.decode();
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() ?? "";
+      consumeLines(lines);
     }
-    if (buffer.startsWith("data:")) {
-      dataLines.push(buffer.slice(5).trimStart());
+    if (buffer) {
+      consumeLines(buffer.split(/\r?\n/));
     }
     flushEvent();
   },

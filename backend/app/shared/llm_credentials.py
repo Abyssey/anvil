@@ -11,6 +11,16 @@ from fastapi import Header
 from backend.app.shared.errors import LLMSettingsRequiredError
 
 
+def _normalize_base_url(raw_url: str) -> str:
+    url = raw_url.strip().rstrip("/")
+    lowered = url.lower()
+    for suffix in ("/chat/completions", "/models"):
+        if lowered.endswith(suffix):
+            url = url[: -len(suffix)].rstrip("/")
+            break
+    return url
+
+
 @dataclass(frozen=True)
 class LLMCredentials:
     """Ephemeral OpenAI-compatible credentials supplied per request by browser UI Settings."""
@@ -21,7 +31,7 @@ class LLMCredentials:
     enable_thinking: bool = True
 
     def __post_init__(self) -> None:
-        normalized_url = self.base_url.strip().rstrip("/")
+        normalized_url = _normalize_base_url(self.base_url)
         normalized_model = self.model.strip()
         normalized_key = self.api_key.strip()
         if not normalized_url or not normalized_model or not normalized_key:

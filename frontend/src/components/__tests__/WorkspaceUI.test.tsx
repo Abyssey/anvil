@@ -188,4 +188,79 @@ describe("Abyss Workspace UI (Astryx + HITL)", () => {
     fireEvent.click(screen.getByRole("button", { name: "backend/app.py (+12)" }));
     expect(val.actions.jumpToDiffHunk).toHaveBeenCalledWith("backend/app.py", "+12");
   });
+
+  it("renders empty-state onboarding prompt and unconfigured LLM banner when messages are empty", () => {
+    const val = makeMockValue({
+      settings: {
+        baseUrl: "",
+        model: "qwen3.8-flash",
+        apiKey: "",
+        enableThinking: true,
+      },
+      messages: [],
+      streamingAssistant: null,
+    });
+    renderWorkspace(val);
+
+    expect(screen.getByRole("heading", { name: "Abyss Coding Agent" })).toBeInTheDocument();
+    expect(screen.getByText("Configure your LLM endpoint")).toBeInTheDocument();
+
+    const onboardingBtn = screen.getByRole("button", {
+      name: "이 프로젝트 구조와 핵심 의존성을 파악해서 온보딩 문서로 정리해줘",
+    });
+    fireEvent.click(onboardingBtn);
+    expect(val.actions.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("submits composer input once and keeps Stop clickable during streaming", () => {
+    const val = makeMockValue();
+    const { unmount } = renderWorkspace(val);
+
+    const textbox = screen.getByRole("textbox", { name: "Message input" });
+    textbox.textContent = "Explain architecture";
+    fireEvent.input(textbox);
+    fireEvent.keyDown(textbox, { key: "Enter", code: "Enter" });
+
+    expect(val.actions.sendMessage).toHaveBeenCalledTimes(1);
+    expect(val.actions.sendMessage).toHaveBeenCalledWith("Explain architecture");
+    unmount();
+
+    const streamingVal = makeMockValue({ isStreaming: true });
+    renderWorkspace(streamingVal);
+    const streamingBox = screen.getByRole("textbox", { name: "Message input" });
+    expect(streamingBox).toHaveAttribute("aria-disabled", "true");
+    const stopBtn = screen.getByRole("button", { name: /stop/i });
+    expect(stopBtn).not.toBeDisabled();
+    fireEvent.click(stopBtn);
+    expect(streamingVal.actions.stopStream).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows inline Plan review controls when drawer is closed and supports Cancel (deny)", () => {
+    const val = makeMockValue({
+      mode: "plan",
+      rightDrawerTab: null,
+      activeSession: {
+        id: "sess-1",
+        title: "Plan Run",
+        workspace_path: "/repo",
+        mode: "plan",
+        status: "awaiting_approval",
+        pending_interrupt: {
+          kind: "plan_review",
+          summary: "Review implementation_plan.md",
+          artifact_kind: "implementation_plan",
+        },
+        created_at: "2026-11-22T00:00:00Z",
+        updated_at: "2026-11-22T00:00:00Z",
+      },
+    });
+    renderWorkspace(val);
+
+    expect(screen.getByText("Plan ready for review")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Open Plan" }));
+    expect(val.actions.openRightDrawer).toHaveBeenCalledWith("artifacts");
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(val.actions.resumeInterrupt).toHaveBeenCalledWith("deny");
+  });
 });

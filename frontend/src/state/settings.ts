@@ -38,9 +38,21 @@ export function loadLLMSettings(): LLMSettings {
   }
 }
 
+export function normalizeBaseUrl(raw: string): string {
+  let url = raw.trim().replace(/\/+$/, "");
+  const lowered = url.toLowerCase();
+  for (const suffix of ["/chat/completions", "/models"]) {
+    if (lowered.endsWith(suffix)) {
+      url = url.slice(0, -suffix.length).replace(/\/+$/, "");
+      break;
+    }
+  }
+  return url;
+}
+
 export function saveLLMSettings(settings: LLMSettings): LLMSettings {
   const normalized: LLMSettings = {
-    baseUrl: settings.baseUrl.trim().replace(/\/+$/, ""),
+    baseUrl: normalizeBaseUrl(settings.baseUrl),
     model: settings.model.trim() || DEFAULT_LLM_SETTINGS.model,
     apiKey: settings.apiKey.trim(),
     enableThinking: settings.enableThinking,

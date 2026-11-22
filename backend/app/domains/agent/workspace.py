@@ -52,6 +52,9 @@ class WorkspaceDiffResponse(BaseModel):
 class WorkspaceInspector:
     """Inspects local repositories safely within canonical workspace boundaries."""
 
+    def __init__(self, *, http_transport: httpx.AsyncBaseTransport | None = None) -> None:
+        self._http_transport = http_transport
+
     async def validate_workspace(self, workspace_path: str) -> WorkspaceInfo:
         root = self._resolve_root(workspace_path)
         branch = await self._git_output(root, "rev-parse", "--abbrev-ref", "HEAD")
@@ -140,7 +143,7 @@ class WorkspaceInspector:
         ]
 
         seen_paths = {f.path for f in files}
-        status_raw = await self._git_output(root, "status", "--porcelain")
+        status_raw = await self._git_output(root, "status", "--porcelain", "-uall")
         for line in status_raw.splitlines():
             if not line.startswith("?? "):
                 continue
@@ -151,6 +154,8 @@ class WorkspaceInspector:
             try:
                 target.relative_to(root)
             except ValueError:
+                continue
+            if not target.is_file():
                 continue
             preview = ""
             if target.is_file():
@@ -175,18 +180,36 @@ class WorkspaceInspector:
 
     async def ping_llm(self, creds: LLMCredentials) -> dict[str, object]:
         """Verify OpenAI-compatible endpoint reachability without logging credentials."""
-        url = f"{creds.base_url}/models"
+        models_url = f"{creds.base_url}/models"
         headers = {"Authorization": f"Bearer {creds.api_key}"}
         try:
-            async with httpx.AsyncClient(trust_env=False, timeout=10.0) as client:
-                resp = await client.get(url, headers=headers)
+            async with httpx.AsyncClient(
+                transport=self._http_transport,
+                trust_env=False,
+                timeout=10.0,
+            ) as client:
+                resp = await client.get(models_url, headers=headers)
+                if resp.status_code in {404, 405}:
+                    resp = await client.post(
+                        f"{creds.base_url}/chat/completions",
+                        headers=headers,
+                        json={
+                            "model": creds.model,
+                            "messages": [{"role": "user", "content": "ping"}],
+                            "max_tokens": 1,
+                        },
+                    )
         except httpx.HTTPError as exc:
-            msg = f"Failed to connect to {creds.base_url}: {type(exc).__name__}"
+            msg = creds.redact_secrets(
+                f"Failed to connect to {creds.base_url}: {type(exc).__name__}"
+            )
             raise LLMUpstreamError(msg) from exc
 
         if resp.status_code >= 400:
+            snippet = creds.redact_secrets(resp.text[:240].strip())
+            detail_suffix = f": {snippet}" if snippet else ""
             raise LLMUpstreamError(
-                f"LLM endpoint returned HTTP {resp.status_code}",
+                f"LLM endpoint returned HTTP {resp.status_code}{detail_suffix}",
                 details={"status_code": resp.status_code},
             )
         return {"ok": True, "base_url": creds.base_url, "model": creds.model}

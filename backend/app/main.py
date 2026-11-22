@@ -28,7 +28,6 @@ def create_app(
 ) -> FastAPI:
     """Construct the Abyss v2 FastAPI application with async SQLite persistence."""
     app_config = config or AppConfig.from_repo_root()
-    app_config.ensure_directories()
 
     @asynccontextmanager
     async def lifespan(fastapi_app: FastAPI) -> AsyncIterator[None]:

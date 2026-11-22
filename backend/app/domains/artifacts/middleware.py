@@ -176,6 +176,8 @@ class ArtifactWorkflowMiddleware(AgentMiddleware[ArtifactWorkflowState, Any, Any
                     ],
                     "jump_to": "model",
                 }
+            if isinstance(resume_val, Mapping) and resume_val.get("decision") == "deny":
+                return None
             feedback = (
                 str(resume_val.get("feedback") or "Please revise the implementation plan.")
                 if isinstance(resume_val, Mapping)

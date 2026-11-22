@@ -64,6 +64,13 @@ export function ArtifactDrawer() {
             />
             <HStack gap={2} hAlign="end">
               <Button
+                label="Cancel"
+                variant="ghost"
+                size="sm"
+                isDisabled={state.isStreaming}
+                onClick={() => void actions.resumeInterrupt("deny")}
+              />
+              <Button
                 label="Request Changes"
                 variant="secondary"
                 size="sm"
@@ -130,19 +137,19 @@ export function ArtifactDrawer() {
                   onChange={setSaveRelPath}
                   placeholder="docs/ONBOARDING.md"
                 />
-                <HStack gap={2} hAlign="between" vAlign="center">
+                <HStack hAlign="start">
                   <Button
                     label="Save File"
                     variant="secondary"
                     size="sm"
                     onClick={() => void handleSave()}
                   />
-                  {saveMessage && (
-                    <Text type="supporting" color="secondary">
-                      {saveMessage}
-                    </Text>
-                  )}
                 </HStack>
+                {saveMessage && (
+                  <Text type="supporting" color="secondary">
+                    {saveMessage}
+                  </Text>
+                )}
               </VStack>
             </Collapsible>
           </VStack>

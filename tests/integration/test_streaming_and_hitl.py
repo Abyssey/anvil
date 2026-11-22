@@ -387,3 +387,141 @@ def test_shell_deny_in_plan_mode_skips_execution(tmp_path: Path) -> None:
         events = _parse_sse(res2.text)
         assert any(name == "done" for name, _ in events)
         assert not sentinel.exists()
+
+
+async def test_stream_cancellation_recovers_session_status_and_saves_partial_message(
+    tmp_path: Path,
+) -> None:
+    import asyncio
+    from collections.abc import AsyncIterator
+
+    import pytest
+
+    from backend.app.domains.agent.harness import DeepAgentHarness, HarnessEvent
+    from backend.app.domains.agent.workspace import WorkspaceInspector
+    from backend.app.domains.artifacts.store import ArtifactStore
+    from backend.app.domains.sessions.entities import RunMode, SessionStatus
+    from backend.app.domains.sessions.repository import SQLiteSessionRepository
+    from backend.app.domains.sessions.service import SessionService
+
+    workspace = tmp_path / "repo"
+    _init_workspace(workspace)
+    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=workspace)
+    cfg.ensure_directories()
+
+    repo = SQLiteSessionRepository(cfg.sqlite_path)
+    await repo.initialize()
+    store = ArtifactStore(cfg.artifacts_root)
+    inspector = WorkspaceInspector()
+
+    class _CancellingHarness(DeepAgentHarness):
+        async def stream_run(  # type: ignore[override]
+            self,
+            *,
+            session_id: str,
+            workspace_path: Path,
+            mode: str,
+            user_message: str,
+            creds: LLMCredentials,
+        ) -> AsyncIterator[HarnessEvent]:
+            yield HarnessEvent("thinking", {"text": "Inspecting tree..."})
+            yield HarnessEvent(
+                "tool_start",
+                {"id": "tc-1", "name": "ls", "args": {"path": "/"}},
+            )
+            yield HarnessEvent("token", {"text": "Partial answer before stop."})
+            raise asyncio.CancelledError()
+
+    service = SessionService(
+        config=cfg,
+        repo=repo,
+        artifact_store=store,
+        workspace_inspector=inspector,
+        harness=_CancellingHarness(config=cfg, artifact_store=store),
+    )
+    created = await service.create_session(workspace_path=str(workspace), mode=RunMode.ASK)
+    creds = LLMCredentials(
+        base_url="http://localhost:8001/v1",
+        model="qwen3.8-flash",
+        api_key="sk-test-123456",
+    )
+
+    received: list[str] = []
+    with pytest.raises(asyncio.CancelledError):
+        async for ev in service.stream_message(
+            session_id=created.id,
+            content="Explain project",
+            mode=RunMode.ASK,
+            creds=creds,
+        ):
+            received.append(ev.event)
+
+    assert received == ["thinking", "tool_start", "token"]
+    reloaded, messages = await service.get_session_detail(created.id)
+    assert reloaded.status == SessionStatus.IDLE
+    assert reloaded.pending_interrupt is None
+    assert len(messages) == 2
+    assert messages[1].role == "assistant"
+    assert messages[1].content == "Partial answer before stop."
+    assert messages[1].thinking == "Inspecting tree..."
+    assert messages[1].tool_calls[0].status == "cancelled"
+
+
+def test_plan_deny_cancels_cleanly_and_delete_session_removes_artifacts(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    _init_workspace(workspace)
+    model = ScriptedReasoningChatModel(
+        turns=[
+            ScriptedTurn(
+                tool_calls=[
+                    {
+                        "name": "write_file",
+                        "args": {
+                            "file_path": "/artifacts/implementation_plan.md",
+                            "content": "# Plan\nDraft plan",
+                        },
+                    }
+                ]
+            ),
+            ScriptedTurn(content="Plan ready."),
+        ]
+    )
+    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=workspace)
+    app = create_app(config=cfg, model_factory=_FakeModelFactory(model))
+    with TestClient(app) as client:
+        sid = client.post(
+            "/api/sessions",
+            json={"workspace_path": str(workspace), "mode": "plan"},
+        ).json()["id"]
+
+        r1 = client.post(
+            f"/api/sessions/{sid}/messages/stream",
+            json={"content": "Draft plan", "mode": "plan"},
+            headers=_headers(),
+        )
+        assert any(
+            name == "interrupt" and p["kind"] == "plan_review"
+            for name, p in _parse_sse(r1.text)
+        )
+        assert (cfg.artifacts_root / sid / "implementation_plan.md").is_file()
+
+        # Denying plan_review must cancel cleanly without calling the LLM again or re-interrupting
+        r2 = client.post(
+            f"/api/sessions/{sid}/resume",
+            json={"decision": "deny"},
+            headers=_headers(),
+        )
+        events2 = _parse_sse(r2.text)
+        assert not any(name == "interrupt" for name, _ in events2)
+        assert any(name == "done" for name, _ in events2)
+
+        detail = client.get(f"/api/sessions/{sid}").json()
+        assert detail["session"]["status"] == "idle"
+        assert detail["session"]["pending_interrupt"] is None
+
+        # Deleting the session must also delete its artifact directory on disk
+        del_resp = client.delete(f"/api/sessions/{sid}")
+        assert del_resp.status_code == 204
+        assert not (cfg.artifacts_root / sid).exists()

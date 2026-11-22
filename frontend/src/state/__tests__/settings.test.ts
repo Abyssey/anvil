@@ -35,4 +35,22 @@ describe("LLMSettings localStorage persistence", () => {
     const cleared = clearLLMSettings();
     expect(isLLMConfigured(cleared)).toBe(false);
   });
+
+  it("strips /chat/completions and /models suffixes from pasted endpoint URLs", () => {
+    const fromCompletions = saveLLMSettings({
+      baseUrl: "http://localhost:8001/v1/chat/completions/",
+      model: "qwen3.8-flash",
+      apiKey: "sk-test",
+      enableThinking: true,
+    });
+    expect(fromCompletions.baseUrl).toBe("http://localhost:8001/v1");
+
+    const fromModels = saveLLMSettings({
+      baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models",
+      model: "qwen3.8-flash",
+      apiKey: "sk-test",
+      enableThinking: true,
+    });
+    expect(fromModels.baseUrl).toBe("https://dashscope-intl.aliyuncs.com/compatible-mode/v1");
+  });
 });

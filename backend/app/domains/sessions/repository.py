@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
@@ -37,11 +39,18 @@ class SQLiteSessionRepository:
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
 
+    @asynccontextmanager
+    async def _connect(self) -> AsyncIterator[aiosqlite.Connection]:
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute("PRAGMA foreign_keys=ON;")
+            await db.execute("PRAGMA busy_timeout=5000;")
+            yield db
+
     async def initialize(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        async with aiosqlite.connect(self._db_path) as db:
+        async with self._connect() as db:
             await db.execute("PRAGMA journal_mode=WAL;")
-            await db.execute("PRAGMA foreign_keys=ON;")
             await db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS sessions (
@@ -72,17 +81,14 @@ class SQLiteSessionRepository:
             await db.commit()
 
     async def list_sessions(self) -> list[Session]:
-        async with aiosqlite.connect(self._db_path) as db:
-            db.row_factory = aiosqlite.Row
-            async with db.execute(
-                "SELECT * FROM sessions ORDER BY updated_at DESC"
-            ) as cursor:
-                rows = await cursor.fetchall()
+        async with self._connect() as db, db.execute(
+            "SELECT * FROM sessions ORDER BY updated_at DESC"
+        ) as cursor:
+            rows = await cursor.fetchall()
         return [self._row_to_session(row) for row in rows]
 
     async def create_session(self, session: Session) -> Session:
-        async with aiosqlite.connect(self._db_path) as db:
-            await db.execute("PRAGMA foreign_keys=ON;")
+        async with self._connect() as db:
             await db.execute(
                 """
                 INSERT INTO sessions (
@@ -108,20 +114,18 @@ class SQLiteSessionRepository:
         return session
 
     async def get_session(self, session_id: str) -> Session:
-        async with aiosqlite.connect(self._db_path) as db:
-            db.row_factory = aiosqlite.Row
-            async with db.execute(
-                "SELECT * FROM sessions WHERE id = ?",
-                (session_id,),
-            ) as cursor:
-                row = await cursor.fetchone()
+        async with self._connect() as db, db.execute(
+            "SELECT * FROM sessions WHERE id = ?",
+            (session_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
         if row is None:
             raise SessionNotFoundError(session_id)
         return self._row_to_session(row)
 
     async def update_session(self, session: Session) -> Session:
         updated = session.model_copy(update={"updated_at": datetime.now(UTC)})
-        async with aiosqlite.connect(self._db_path) as db:
+        async with self._connect() as db:
             cursor = await db.execute(
                 """
                 UPDATE sessions
@@ -147,8 +151,7 @@ class SQLiteSessionRepository:
         return updated
 
     async def delete_session(self, session_id: str) -> None:
-        async with aiosqlite.connect(self._db_path) as db:
-            await db.execute("PRAGMA foreign_keys=ON;")
+        async with self._connect() as db:
             cursor = await db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
             if cursor.rowcount == 0:
                 raise SessionNotFoundError(session_id)
@@ -156,8 +159,7 @@ class SQLiteSessionRepository:
 
     async def append_message(self, message: ChatMessage) -> ChatMessage:
         tool_json = json.dumps([tc.model_dump(mode="json") for tc in message.tool_calls])
-        async with aiosqlite.connect(self._db_path) as db:
-            await db.execute("PRAGMA foreign_keys=ON;")
+        async with self._connect() as db:
             await db.execute(
                 """
                 INSERT INTO messages (
@@ -180,13 +182,11 @@ class SQLiteSessionRepository:
 
     async def list_messages(self, session_id: str) -> list[ChatMessage]:
         await self.get_session(session_id)
-        async with aiosqlite.connect(self._db_path) as db:
-            db.row_factory = aiosqlite.Row
-            async with db.execute(
-                "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC",
-                (session_id,),
-            ) as cursor:
-                rows = await cursor.fetchall()
+        async with self._connect() as db, db.execute(
+            "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC",
+            (session_id,),
+        ) as cursor:
+            rows = await cursor.fetchall()
         messages: list[ChatMessage] = []
         for row in rows:
             raw_tools = json.loads(row["tool_calls_json"])

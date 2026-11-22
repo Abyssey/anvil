@@ -69,3 +69,28 @@ def test_save_to_workspace_enforces_confinement(tmp_path: Path) -> None:
             workspace_path=str(workspace),
             relative_path="../escape.md",
         )
+
+
+def test_delete_session_artifacts_removes_directory_idempotently(tmp_path: Path) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    store = ArtifactStore(artifacts_root)
+    store.write_artifact("sess-del", ArtifactKind.WALKTHROUGH, "# Temp")
+    assert (artifacts_root / "sess-del").is_dir()
+
+    store.delete_session_artifacts("sess-del")
+    assert not (artifacts_root / "sess-del").exists()
+    store.delete_session_artifacts("sess-del")
+
+
+def test_render_todos_markdown_uses_valid_gfm_checkboxes() -> None:
+    md = ArtifactStore.render_todos_markdown(
+        [
+            {"content": "Step A", "status": "completed"},
+            {"content": "Step B", "status": "in_progress"},
+            {"content": "Step C", "status": "pending"},
+        ]
+    )
+    assert "- [x] Step A" in md
+    assert "- [ ] **(In Progress)** Step B" in md
+    assert "- [ ] Step C" in md
+    assert "[/]" not in md
