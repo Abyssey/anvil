@@ -53,6 +53,7 @@ function makeMemoryMockValue(
     sessions: [baseSession],
     activeSession: baseSession,
     messages: [],
+    turnDurationsMs: {},
     hasMoreMessages: false,
     isLoadingOlderMessages: false,
     streamingAssistant: null,

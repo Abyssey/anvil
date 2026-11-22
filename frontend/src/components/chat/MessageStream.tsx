@@ -8,48 +8,55 @@ import {
   ChatMessageBubble,
   ChatMessageList,
   ChatToolCalls,
-  type ChatToolCallItem,
 } from "@astryxdesign/core/Chat";
-import { CodeBlock } from "@astryxdesign/core/CodeBlock";
 import { Collapsible } from "@astryxdesign/core/Collapsible";
 import { Heading } from "@astryxdesign/core/Heading";
 import { Markdown } from "@astryxdesign/core/Markdown";
 import { Spinner } from "@astryxdesign/core/Spinner";
 import { HStack, VStack } from "@astryxdesign/core/Stack";
 import { Text } from "@astryxdesign/core/Text";
-import type { ToolCallRecord } from "../../api/types";
 import { useWorkspace } from "../../state/workspaceContext";
+import {
+  computeAssistantTurnDurationMs,
+  formatWorkedDuration,
+  formatWorkingDuration,
+  groupToolCalls,
+  type GroupedToolBlock,
+} from "../../utils/toolCallGroups";
 import {
   ABYSS_MARKDOWN_PLUGINS,
   ABYSS_STREAMING_MARKDOWN_PLUGINS,
 } from "../markdown/markdownPlugins";
 import { Composer } from "./Composer";
+import { ExplorationGroupView, toChatToolCallItem } from "./ExplorationGroupView";
 import { ShellApprovalCard } from "./ShellApprovalCard";
 
 const ONBOARDING_SAMPLE_PROMPT =
   "이 프로젝트 구조와 핵심 의존성을 파악해서 온보딩 문서로 정리해줘";
 
-function formatToolTarget(args: Record<string, unknown>): string | undefined {
-  for (const key of ["file_path", "path", "pattern", "command", "subagent_type"]) {
-    const val = args[key];
-    if (typeof val === "string" && val.trim()) {
-      return val.trim();
-    }
+function renderGroupedToolBlocks(
+  blocks: readonly GroupedToolBlock[],
+  groupOpenOverrides: Readonly<Record<string, boolean>>,
+  onToggleGroup: (groupId: string, nextOpen: boolean) => void,
+) {
+  if (blocks.length === 0) {
+    return null;
   }
-  return undefined;
-}
-
-function toChatToolCalls(records: ToolCallRecord[]): ChatToolCallItem[] {
-  return records.map((tc) => ({
-    key: tc.id || tc.name,
-    name: tc.name,
-    target: formatToolTarget(tc.args),
-    status: tc.status === "running" ? "running" : tc.status === "error" ? "error" : "complete",
-    node: tc.subagent ?? undefined,
-    resultDetail: tc.output ? (
-      <CodeBlock code={tc.output} language="plaintext" maxHeight={180} width="100%" />
-    ) : undefined,
-  }));
+  return blocks.map((block, blockIndex) =>
+    block.kind === "exploration_group" ? (
+      <ExplorationGroupView
+        key={block.id}
+        group={block}
+        isOpen={groupOpenOverrides[block.id] ?? false}
+        onToggle={onToggleGroup}
+      />
+    ) : (
+      <ChatToolCalls
+        key={block.id}
+        calls={[toChatToolCallItem(block.call, blockIndex)]}
+      />
+    ),
+  );
 }
 
 export function MessageStream() {
@@ -62,8 +69,11 @@ export function MessageStream() {
     sawLoading: boolean;
   } | null>(null);
   const [isTopObserverArmed, setIsTopObserverArmed] = useState(false);
+  const [groupOpenOverrides, setGroupOpenOverrides] = useState<Record<string, boolean>>({});
+  const [liveNowMs, setLiveNowMs] = useState<number>(() => Date.now());
 
   const sessionKey = state.activeSession?.id ?? "empty";
+  const streamingStartedAtMs = state.streamingAssistant?.startedAtMs ?? null;
   const firstMsgId = state.messages[0]?.id ?? "";
   const lastMsgId = state.messages[state.messages.length - 1]?.id ?? "";
   const streamingContentLen = state.streamingAssistant?.content.length ?? 0;
@@ -90,6 +100,40 @@ export function MessageStream() {
   firstMsgIdRef.current = firstMsgId;
 
   const { loadOlderMessages } = actions;
+
+  const handleToggleGroup = useCallback((groupId: string, nextOpen: boolean) => {
+    setGroupOpenOverrides((prev) => ({ ...prev, [groupId]: nextOpen }));
+  }, []);
+
+  useEffect(() => {
+    setGroupOpenOverrides({});
+  }, [sessionKey]);
+
+  useEffect(() => {
+    if (!state.isStreaming || streamingStartedAtMs === null) {
+      return;
+    }
+    setLiveNowMs(Date.now());
+    const intervalId = window.setInterval(() => {
+      setLiveNowMs(Date.now());
+    }, 1000);
+    return () => window.clearInterval(intervalId);
+  }, [state.isStreaming, streamingStartedAtMs]);
+
+  const streamingToolBlocks = state.streamingAssistant
+    ? groupToolCalls(state.streamingAssistant.toolCalls, {
+        isStreaming: state.isStreaming,
+        hasAssistantTextStarted:
+          state.streamingAssistant.hasTrailingAssistantText ??
+          state.streamingAssistant.content.trim().length > 0,
+        groupKeyPrefix: `${sessionKey}:stream`,
+        textSplitIndices: state.streamingAssistant.textSplitAfterIndices,
+      })
+    : [];
+  const liveWorkingLabel =
+    state.isStreaming && streamingStartedAtMs !== null
+      ? formatWorkingDuration(Math.max(0, liveNowMs - streamingStartedAtMs))
+      : null;
 
   const triggerLoadOlder = useCallback(() => {
     if (!isTopObserverArmedRef.current || !hasMoreRef.current || isLoadingOlderRef.current) {
@@ -246,16 +290,38 @@ export function MessageStream() {
               </Text>
             </HStack>
           )}
-          {state.messages.map((msg) =>
-            msg.role === "user" ? (
-              <ChatMessage key={msg.id} sender="user">
-                <ChatMessageBubble>{msg.content}</ChatMessageBubble>
-              </ChatMessage>
-            ) : (
+          {state.messages.map((msg, msgIndex) => {
+            if (msg.role === "user") {
+              return (
+                <ChatMessage key={msg.id} sender="user">
+                  <ChatMessageBubble>{msg.content}</ChatMessageBubble>
+                </ChatMessage>
+              );
+            }
+            const toolBlocks = Array.isArray(msg.tool_calls)
+              ? groupToolCalls(msg.tool_calls, {
+                  isStreaming: false,
+                  hasAssistantTextStarted: msg.content.trim().length > 0,
+                  groupKeyPrefix: msg.id,
+                })
+              : [];
+            const durationMs = computeAssistantTurnDurationMs(
+              state.messages,
+              msgIndex,
+              state.turnDurationsMs,
+            );
+            return (
               <ChatMessage
                 key={msg.id}
                 sender="assistant"
                 avatar={<Avatar name="Abyss" size="sm" />}
+                metadata={
+                  durationMs !== null ? (
+                    <Text type="supporting" color="secondary" hasTabularNumbers>
+                      {formatWorkedDuration(durationMs)}
+                    </Text>
+                  ) : undefined
+                }
               >
                 {msg.thinking && (
                   <Collapsible
@@ -273,9 +339,7 @@ export function MessageStream() {
                     </ChatMessageBubble>
                   </Collapsible>
                 )}
-                {Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0 && (
-                  <ChatToolCalls calls={toChatToolCalls(msg.tool_calls)} />
-                )}
+                {renderGroupedToolBlocks(toolBlocks, groupOpenOverrides, handleToggleGroup)}
                 {msg.content && (
                   <ChatMessageBubble variant="ghost">
                     <Markdown density="compact" plugins={ABYSS_MARKDOWN_PLUGINS}>
@@ -284,11 +348,21 @@ export function MessageStream() {
                   </ChatMessageBubble>
                 )}
               </ChatMessage>
-            ),
-          )}
+            );
+          })}
 
           {state.streamingAssistant && (
-            <ChatMessage sender="assistant" avatar={<Avatar name="Abyss" size="sm" />}>
+            <ChatMessage
+              sender="assistant"
+              avatar={<Avatar name="Abyss" size="sm" />}
+              metadata={
+                liveWorkingLabel ? (
+                  <Text type="supporting" color="secondary" hasTabularNumbers>
+                    {liveWorkingLabel}
+                  </Text>
+                ) : undefined
+              }
+            >
               {state.streamingAssistant.thinking && (
                 <Collapsible
                   defaultIsOpen
@@ -309,12 +383,7 @@ export function MessageStream() {
                   </ChatMessageBubble>
                 </Collapsible>
               )}
-              {state.streamingAssistant.toolCalls.length > 0 && (
-                <ChatToolCalls
-                  defaultIsExpanded
-                  calls={toChatToolCalls(state.streamingAssistant.toolCalls)}
-                />
-              )}
+              {renderGroupedToolBlocks(streamingToolBlocks, groupOpenOverrides, handleToggleGroup)}
               {state.streamingAssistant.content && (
                 <ChatMessageBubble variant="ghost">
                   <Markdown

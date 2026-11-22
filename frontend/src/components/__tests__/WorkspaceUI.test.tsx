@@ -1,5 +1,5 @@
 import { Theme } from "@astryxdesign/core/theme";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { defaultThemeSlug, themes } from "../../astryx-themes";
 import {
@@ -54,6 +54,7 @@ function makeMockValue(
     sessions: [baseSession],
     activeSession: baseSession,
     messages: [],
+    turnDurationsMs: {},
     hasMoreMessages: false,
     isLoadingOlderMessages: false,
     streamingAssistant: null,
@@ -443,5 +444,250 @@ describe("Abyss Workspace UI (Astryx + HITL)", () => {
 
     expect(val.actions.selectProject).toHaveBeenCalledWith("proj-a");
     browseSpy.mockRestore();
+  });
+
+  it("renders per-turn Worked for durations and ticks live Working · timer while streaming", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-11-22T00:05:10.000Z"));
+      const val = makeMockValue({
+        isStreaming: true,
+        turnDurationsMs: { a1: 74_000 },
+        messages: [
+          {
+            id: "u1",
+            session_id: "sess-1",
+            role: "user",
+            content: "Check backend",
+            thinking: "",
+            tool_calls: [],
+            created_at: "2026-11-22T00:00:00.000Z",
+          },
+          {
+            id: "a1",
+            session_id: "sess-1",
+            role: "assistant",
+            content: "Backend checked.",
+            thinking: "",
+            tool_calls: [],
+            created_at: "2026-11-22T00:00:05.000Z",
+          },
+          {
+            id: "u2",
+            session_id: "sess-1",
+            role: "user",
+            content: "Check frontend",
+            thinking: "",
+            tool_calls: [],
+            created_at: "2026-11-22T00:01:00.000Z",
+          },
+          {
+            id: "a2",
+            session_id: "sess-1",
+            role: "assistant",
+            content: "Frontend checked.",
+            thinking: "",
+            tool_calls: [],
+            created_at: "2026-11-22T00:01:08.000Z",
+          },
+        ],
+        streamingAssistant: {
+          content: "",
+          thinking: "",
+          toolCalls: [
+            {
+              id: "tc-live-1",
+              name: "read_file",
+              args: { file_path: "/backend/app.py" },
+              output: "",
+              status: "running",
+              subagent: null,
+            },
+          ],
+          startedAtMs: Date.now() - 3_000,
+          textSplitAfterIndices: [],
+          hasTrailingAssistantText: false,
+        },
+      });
+
+      renderWorkspace(val);
+
+      // Recorded duration overrides timestamp diff for a1; timestamp diff used for a2
+      expect(screen.getByText("Worked for 1m 14s")).toBeInTheDocument();
+      expect(screen.getByText("Worked for 8s")).toBeInTheDocument();
+
+      // Live streaming timer starts at 3s and ticks to 4s after 1s
+      expect(screen.getByText("Working · 3s")).toBeInTheDocument();
+      expect(screen.getByText("app.py 읽는 중...")).toBeInTheDocument();
+      expect(screen.queryByText("read_file")).not.toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+      expect(screen.getByText("Working · 4s")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("auto-collapses completed ExplorationGroups and preserves manual toggle state across re-renders", () => {
+    const messages = [
+      {
+        id: "u1",
+        session_id: "sess-1",
+        role: "user" as const,
+        content: "Inspect repo and edit app.py",
+        thinking: "",
+        tool_calls: [],
+        created_at: "2026-11-22T00:00:00.000Z",
+      },
+      {
+        id: "a1",
+        session_id: "sess-1",
+        role: "assistant" as const,
+        content: "Done inspecting and editing.",
+        thinking: "",
+        tool_calls: [
+          {
+            id: "tc-1",
+            name: "ls",
+            args: { path: "/backend" },
+            output: "app.py\nmain.py",
+            status: "success",
+            subagent: null,
+          },
+          {
+            id: "tc-2",
+            name: "read_file",
+            args: { file_path: "/backend/app.py" },
+            output: "print('hi')",
+            status: "success",
+            subagent: null,
+          },
+          {
+            id: "tc-3",
+            name: "edit_file",
+            args: { file_path: "/backend/app.py" },
+            output: "Updated",
+            status: "success",
+            subagent: null,
+          },
+        ],
+        created_at: "2026-11-22T00:00:06.000Z",
+      },
+    ];
+
+    const initialVal = makeMockValue({
+      messages,
+      isStreaming: true,
+      streamingAssistant: {
+        content: "Follow-up token 1",
+        thinking: "",
+        toolCalls: [
+          {
+            id: "st-1",
+            name: "grep",
+            args: { pattern: "WorkspaceProvider", path: "/frontend" },
+            output: "workspaceContext.tsx:175",
+            status: "success",
+            subagent: null,
+          },
+          {
+            id: "st-2",
+            name: "execute",
+            args: { command: "npm test" },
+            output: "",
+            status: "running",
+            subagent: null,
+          },
+        ],
+        startedAtMs: Date.now(),
+        textSplitAfterIndices: [],
+        hasTrailingAssistantText: false,
+      },
+    });
+    const { rerender } = renderWorkspace(initialVal);
+
+    // Non-read tool renders individually immediately, while read exploration groups start collapsed
+    expect(screen.getByText("edit_file")).toBeInTheDocument();
+    expect(screen.getByText("execute")).toBeInTheDocument();
+    const persistedTrigger = screen.getByRole("button", {
+      name: "폴더 1개 탐색 · 파일 1개 읽음",
+    });
+    const streamingTrigger = screen.getByRole("button", {
+      name: "검색 1회",
+    });
+    expect(persistedTrigger).toHaveAttribute("aria-expanded", "false");
+    expect(streamingTrigger).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("read_file")).not.toBeInTheDocument();
+    expect(screen.queryByText("grep")).not.toBeInTheDocument();
+
+    // User manually expands both persisted and streaming-draft exploration groups
+    fireEvent.click(persistedTrigger);
+    fireEvent.click(streamingTrigger);
+    expect(persistedTrigger).toHaveAttribute("aria-expanded", "true");
+    expect(streamingTrigger).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("read_file")).toBeInTheDocument();
+    expect(screen.getByText("ls")).toBeInTheDocument();
+    expect(screen.getByText("grep")).toBeInTheDocument();
+
+    // Subsequent SSE token + new tool call triggers re-render; manual expanded state MUST persist
+    const updatedVal = makeMockValue({
+      messages,
+      isStreaming: true,
+      streamingAssistant: {
+        content: "Follow-up token 1 and token 2",
+        thinking: "",
+        toolCalls: [
+          {
+            id: "st-1",
+            name: "grep",
+            args: { pattern: "WorkspaceProvider", path: "/frontend" },
+            output: "workspaceContext.tsx:175",
+            status: "success",
+            subagent: null,
+          },
+          {
+            id: "st-2",
+            name: "execute",
+            args: { command: "npm test" },
+            output: "PASS",
+            status: "success",
+            subagent: null,
+          },
+          {
+            id: "st-3",
+            name: "read_file",
+            args: { file_path: "/frontend/src/App.tsx" },
+            output: "",
+            status: "running",
+            subagent: null,
+          },
+        ],
+        startedAtMs: initialVal.state.streamingAssistant?.startedAtMs ?? Date.now(),
+        textSplitAfterIndices: [],
+        hasTrailingAssistantText: false,
+      },
+    });
+    rerender(
+      <Theme theme={themes[defaultThemeSlug]}>
+        <WorkspaceProvider initialValue={updatedVal}>
+          <WorkspaceShell />
+          <SettingsDialog />
+          <AddProjectDialog />
+        </WorkspaceProvider>
+      </Theme>,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "폴더 1개 탐색 · 파일 1개 읽음" }),
+    ).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: "검색 1회" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    expect(screen.getByText("read_file")).toBeInTheDocument();
+    expect(screen.getByText("grep")).toBeInTheDocument();
+    expect(screen.getByText("App.tsx 읽는 중...")).toBeInTheDocument();
   });
 });

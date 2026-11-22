@@ -205,9 +205,14 @@ describe("App + LiveWorkspaceProvider end-to-end integration", () => {
       fireEvent.click(sampleBtn);
     });
 
-    // 4. Verify assistant message, auto-opened Walkthrough artifact drawer, and settled stream state
+    // 4. Verify assistant message, collapsed ExplorationGroup, Worked for duration, auto-opened Walkthrough drawer, and settled stream state
     await screen.findByText("온보딩 문서를 생성했습니다.");
     await screen.findByText("DDD bounded contexts verified.");
+    expect(screen.getByRole("button", { name: "폴더 1개 탐색" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(screen.getByText(/^Worked for /)).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByRole("textbox", { name: "Message input" })).not.toHaveAttribute(
         "aria-disabled",

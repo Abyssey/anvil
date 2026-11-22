@@ -37,6 +37,9 @@ export interface StreamingAssistantDraft {
   content: string;
   thinking: string;
   toolCalls: ToolCallRecord[];
+  startedAtMs: number;
+  textSplitAfterIndices?: number[];
+  hasTrailingAssistantText?: boolean;
 }
 
 export interface WorkspaceState {
@@ -52,6 +55,7 @@ export interface WorkspaceState {
   sessions: Session[];
   activeSession: Session | null;
   messages: ChatMessage[];
+  turnDurationsMs: Record<string, number>;
   hasMoreMessages: boolean;
   isLoadingOlderMessages: boolean;
   streamingAssistant: StreamingAssistantDraft | null;
@@ -199,6 +203,7 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSession, setActiveSession] = useState<Session | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [turnDurationsMs, setTurnDurationsMs] = useState<Record<string, number>>({});
   const [hasMoreMessages, setHasMoreMessages] = useState(false);
   const [isLoadingOlderMessages, setIsLoadingOlderMessages] = useState(false);
   const [streamingAssistant, setStreamingAssistant] =
@@ -243,6 +248,7 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
     activeSessionRef.current = null;
     setActiveSession(null);
     setMessages([]);
+    setTurnDurationsMs({});
     setStreamingAssistant(null);
     setIsStreaming(false);
     setArtifacts(EMPTY_ARTIFACTS);
@@ -633,9 +639,22 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
     async (url: string, body: Record<string, unknown>, targetSessionId: string, wsPath: string) => {
       const controller = new AbortController();
       abortRef.current = controller;
+      const startedAtMs = Date.now();
+      const existingMessageIds = new Set(
+        messagesRef.current
+          .filter((m) => m.session_id === targetSessionId && !m.id.startsWith("local-"))
+          .map((m) => m.id),
+      );
       setIsStreaming(true);
       setStreamError(null);
-      setStreamingAssistant({ content: "", thinking: "", toolCalls: [] });
+      setStreamingAssistant({
+        content: "",
+        thinking: "",
+        toolCalls: [],
+        startedAtMs,
+        textSplitAfterIndices: [],
+        hasTrailingAssistantText: false,
+      });
 
       try {
         await apiClient.streamSSE(url, body, settings, controller.signal, (ev: StreamEvent) => {
@@ -647,9 +666,24 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
             );
           } else if (ev.event === "token") {
             const delta = String(ev.data.text ?? "");
-            setStreamingAssistant((prev) =>
-              prev ? { ...prev, content: prev.content + delta } : prev,
-            );
+            setStreamingAssistant((prev) => {
+              if (!prev) return prev;
+              const hasMeaningfulToken = delta.trim().length > 0;
+              const prevSplits = prev.textSplitAfterIndices ?? [];
+              const shouldRecordSplit =
+                hasMeaningfulToken &&
+                prev.toolCalls.length > 0 &&
+                prevSplits[prevSplits.length - 1] !== prev.toolCalls.length;
+              return {
+                ...prev,
+                content: prev.content + delta,
+                textSplitAfterIndices: shouldRecordSplit
+                  ? [...prevSplits, prev.toolCalls.length]
+                  : prevSplits,
+                hasTrailingAssistantText:
+                  Boolean(prev.hasTrailingAssistantText) || hasMeaningfulToken,
+              };
+            });
           } else if (ev.event === "tool_start") {
             const rec: ToolCallRecord = {
               id: String(ev.data.id ?? ""),
@@ -663,7 +697,13 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
               subagent: typeof ev.data.subagent === "string" ? ev.data.subagent : null,
             };
             setStreamingAssistant((prev) =>
-              prev ? { ...prev, toolCalls: [...prev.toolCalls, rec] } : prev,
+              prev
+                ? {
+                    ...prev,
+                    toolCalls: [...prev.toolCalls, rec],
+                    hasTrailingAssistantText: false,
+                  }
+                : prev,
             );
           } else if (ev.event === "tool_end") {
             const id = String(ev.data.id ?? "");
@@ -712,6 +752,7 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
           setStreamError(err instanceof Error ? err.message : "Streaming error");
         }
       } finally {
+        const elapsedMs = Math.max(0, Date.now() - startedAtMs);
         if (abortRef.current === controller) {
           abortRef.current = null;
         }
@@ -737,6 +778,15 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
         if (detail) {
           activeSessionRef.current = detail.session;
           setActiveSession(detail.session);
+          const persistedAssistant = [...detail.messages]
+            .reverse()
+            .find((m) => m.role === "assistant" && !existingMessageIds.has(m.id));
+          if (persistedAssistant) {
+            setTurnDurationsMs((prev) => ({
+              ...prev,
+              [persistedAssistant.id]: elapsedMs,
+            }));
+          }
           let keptOlderPrefix = false;
           setMessages((prev) => {
             const detailIds = new Set(detail.messages.map((m) => m.id));
@@ -930,6 +980,7 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
       sessions,
       activeSession,
       messages,
+      turnDurationsMs,
       hasMoreMessages,
       isLoadingOlderMessages,
       streamingAssistant,
