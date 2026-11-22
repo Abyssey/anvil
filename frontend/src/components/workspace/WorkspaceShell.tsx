@@ -245,6 +245,23 @@ export function WorkspaceShell() {
                   endContent={
                     <HStack gap={1} vAlign="center">
                       <Button
+                        label="Skills"
+                        variant={state.skillsOpen ? "primary" : "ghost"}
+                        size="sm"
+                        endContent={
+                          state.pinnedSkills.length > 0 ? (
+                            <Badge label={String(state.pinnedSkills.length)} variant="purple" />
+                          ) : undefined
+                        }
+                        onClick={actions.openSkills}
+                      />
+                      <Button
+                        label="Memory"
+                        variant={state.memoryOpen ? "primary" : "ghost"}
+                        size="sm"
+                        onClick={actions.openMemory}
+                      />
+                      <Button
                         label="Artifacts"
                         variant={state.rightDrawerTab === "artifacts" ? "primary" : "ghost"}
                         size="sm"

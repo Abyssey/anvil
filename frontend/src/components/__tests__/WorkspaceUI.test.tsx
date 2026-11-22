@@ -1,5 +1,5 @@
 import { Theme } from "@astryxdesign/core/theme";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { defaultThemeSlug, themes } from "../../astryx-themes";
 import {
@@ -45,6 +45,10 @@ function makeMockValue(
     },
     settingsOpen: false,
     addProjectOpen: false,
+    skillsOpen: false,
+    memoryOpen: false,
+    installedSkills: [],
+    pinnedSkills: [],
     projects: [baseProject],
     activeProjectId: "proj-1",
     sessions: [baseSession],
@@ -72,6 +76,14 @@ function makeMockValue(
     closeSettings: vi.fn(),
     openAddProject: vi.fn(),
     closeAddProject: vi.fn(),
+    openSkills: vi.fn(),
+    closeSkills: vi.fn(),
+    openMemory: vi.fn(),
+    closeMemory: vi.fn(),
+    refreshInstalledSkills: vi.fn().mockResolvedValue(undefined),
+    pinSkill: vi.fn(),
+    unpinSkill: vi.fn(),
+    clearPinnedSkills: vi.fn(),
     updateSettings: vi.fn(),
     clearSettings: vi.fn(),
     addProject: vi.fn().mockResolvedValue(undefined),
@@ -359,5 +371,77 @@ describe("Abyss Workspace UI (Astryx + HITL)", () => {
 
     fireEvent.click(backBtn);
     expect(screen.getByPlaceholderText(/Filter files/i)).toBeInTheDocument();
+  });
+
+  it("opens Skills and Memory dialogs from header and renders dismissible pinned skill tokens in Composer", () => {
+    const val = makeMockValue({ pinnedSkills: ["react-patterns"] });
+    renderWorkspace(val);
+
+    fireEvent.click(screen.getByRole("button", { name: /Skills/i }));
+    expect(val.actions.openSkills).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Memory" }));
+    expect(val.actions.openMemory).toHaveBeenCalledTimes(1);
+
+    expect(screen.getByText("/react-patterns")).toBeInTheDocument();
+    const removeTokenBtn = screen.getByRole("button", { name: /Remove \/react-patterns/i });
+    fireEvent.click(removeTokenBtn);
+    expect(val.actions.unpinSkill).toHaveBeenCalledWith("react-patterns");
+  });
+
+  it("opens AddProjectDialog at parent directory and shows Already added / Open Existing Project for registered paths", async () => {
+    const { apiClient } = await import("../../api/client");
+    const browseSpy = vi.spyOn(apiClient, "browseDirectories").mockImplementation(async (path) => {
+      if (path === "/work/repo-a") {
+        return {
+          current_path: "/work/repo-a",
+          parent_path: "/work",
+          is_git_repo: true,
+          branch: "main",
+          directories: [],
+        };
+      }
+      return {
+        current_path: "/work",
+        parent_path: "/",
+        is_git_repo: false,
+        branch: "",
+        directories: [
+          { name: "repo-a", path: "/work/repo-a", is_git_repo: true },
+          { name: "repo-b", path: "/work/repo-b", is_git_repo: true },
+        ],
+      };
+    });
+
+    const val = makeMockValue({
+      addProjectOpen: true,
+      workspacePath: "/work/repo-a",
+      projects: [
+        {
+          id: "proj-a",
+          name: "repo-a",
+          path: "/work/repo-a",
+          is_git_repo: true,
+          branch: "main",
+          created_at: "2026-11-22T00:00:00Z",
+          updated_at: "2026-11-22T00:00:00Z",
+        },
+      ],
+      activeProjectId: "proj-a",
+    });
+    renderWorkspace(val);
+
+    await screen.findByText("repo-b");
+    expect(browseSpy).toHaveBeenCalledWith("/work");
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByRole("button", { name: "Add Project" })).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByText("repo-a"));
+    await within(dialog).findByText("Already added");
+    const openExistingBtn = within(dialog).getByRole("button", { name: "Open Existing Project" });
+    fireEvent.click(openExistingBtn);
+
+    expect(val.actions.selectProject).toHaveBeenCalledWith("proj-a");
+    browseSpy.mockRestore();
   });
 });
