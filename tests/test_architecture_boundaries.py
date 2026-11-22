@@ -58,6 +58,16 @@ def _has_prefix(module_name: str, prefixes: tuple[str, ...]) -> bool:
 def test_pure_stdlib_domain_modules() -> None:
     _assert_stdlib_only(BACKEND_APP / "domains" / "agent" / "shell_guard.py")
     _assert_stdlib_only(BACKEND_APP / "domains" / "artifacts" / "walkthrough_diff.py")
+    _assert_stdlib_only(BACKEND_APP / "shared" / "logging.py")
+
+
+def test_pure_shared_modules_zero_fastapi() -> None:
+    forbidden = ("fastapi", "starlette")
+    for rel in ("errors.py", "llm_credentials.py", "config.py", "logging.py"):
+        py_file = BACKEND_APP / "shared" / rel
+        assert py_file.exists(), f"Expected shared module missing: {py_file}"
+        bad = sorted(m for m in _extract_imports(py_file) if _has_prefix(m, forbidden))
+        assert not bad, f"{py_file} must not import FastAPI/Starlette: {bad}"
 
 
 def test_pure_domain_entities_stdlib_and_pydantic_only() -> None:
@@ -99,6 +109,11 @@ def test_artifacts_domain_isolation() -> None:
         "domains.agent",
         "fastapi",
         "starlette",
+        "langchain",
+        "langchain_core",
+        "langchain_openai",
+        "langgraph",
+        "deepagents",
     )
     for py_file in artifacts_dir.rglob("*.py"):
         if py_file.name == "router.py":

@@ -14,7 +14,7 @@ from httpx import ASGITransport, AsyncClient
 
 from backend.app.domains.agent.run_context import RunCatalog, RunContext
 from backend.app.domains.agent.shell_guard import ShellGuard
-from backend.app.domains.agent.skills import SkillFiles
+from backend.app.domains.agent.skill_backend import SkillFiles
 from backend.app.domains.skills.entities import SkillInstallRequest
 from backend.app.domains.skills.frontmatter import (
     MAX_SKILL_FILE_SIZE,
@@ -31,7 +31,9 @@ from backend.app.domains.skills.registry_client import (
 )
 from backend.app.domains.skills.router import router as skills_router
 from backend.app.domains.skills.store import PROVENANCE_FILENAME, SkillStore
-from backend.app.shared.errors import DomainError, register_exception_handlers
+from backend.app.shared.dependencies import get_skill_store
+from backend.app.shared.errors import DomainError
+from backend.app.shared.http import register_exception_handlers
 from tests.fakes.fake_skills_registry import FakeSkillsRegistry
 
 
@@ -536,11 +538,12 @@ def _build_skills_test_app(tmp_path: Path) -> tuple[FastAPI, Path]:
 
     app = FastAPI()
     register_exception_handlers(app)
-    app.state.skill_store = SkillStore(
+    store = SkillStore(
         bundled_dir=bundled,
         global_dir=global_dir,
         registry_client=FakeSkillsRegistry(),
     )
+    app.dependency_overrides[get_skill_store] = lambda: store
     app.include_router(skills_router)
     return app, workspace
 
@@ -633,3 +636,18 @@ async def test_skills_api_full_lifecycle(tmp_path: Path) -> None:
         )
         assert after_res.status_code == 200
         assert [item["name"] for item in after_res.json()] == ["codebase-onboarding"]
+
+
+def test_create_app_mounts_skills_router_and_builtin_skills(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    from backend.app.main import create_app
+    from backend.app.shared.config import AppConfig
+
+    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=tmp_path)
+    app = create_app(config=cfg)
+    with TestClient(app) as client:
+        resp = client.get("/api/skills/installed")
+        assert resp.status_code == 200
+        names = [(item["scope"], item["name"]) for item in resp.json()]
+        assert ("bundled", "codebase-onboarding") in names

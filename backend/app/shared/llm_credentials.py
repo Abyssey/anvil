@@ -1,12 +1,9 @@
-"""Request-scoped OpenAI-compatible credentials extracted from UI headers."""
+"""Pure request-scoped OpenAI-compatible credentials value object (FastAPI-free)."""
 
 from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from typing import Annotated
-
-from fastapi import Header
 
 from backend.app.shared.errors import LLMSettingsRequiredError
 
@@ -19,6 +16,18 @@ def _normalize_base_url(raw_url: str) -> str:
             url = url[: -len(suffix)].rstrip("/")
             break
     return url
+
+
+def parse_bool_flag(raw: str | None, *, default: bool = True) -> bool:
+    """Parse boolean string flags from configuration or headers."""
+    if raw is None:
+        return default
+    lowered = raw.strip().lower()
+    if lowered in {"1", "true", "yes", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 @dataclass(frozen=True)
@@ -61,48 +70,3 @@ class LLMCredentials:
         if len(self.api_key) >= 6:
             return text.replace(self.api_key, "[REDACTED]")
         return text
-
-
-def _parse_bool(raw: str | None, *, default: bool = True) -> bool:
-    if raw is None:
-        return default
-    lowered = raw.strip().lower()
-    if lowered in {"1", "true", "yes", "on"}:
-        return True
-    if lowered in {"0", "false", "no", "off"}:
-        return False
-    return default
-
-
-def extract_llm_credentials(
-    x_llm_base_url: Annotated[str | None, Header(alias="X-LLM-Base-Url")] = None,
-    x_llm_model: Annotated[str | None, Header(alias="X-LLM-Model")] = None,
-    x_llm_api_key: Annotated[str | None, Header(alias="X-LLM-Api-Key")] = None,
-    x_llm_enable_thinking: Annotated[str | None, Header(alias="X-LLM-Enable-Thinking")] = None,
-) -> LLMCredentials:
-    """Parse and validate mandatory LLM settings from request headers."""
-    if not x_llm_base_url or not x_llm_model or not x_llm_api_key:
-        raise LLMSettingsRequiredError()
-    return LLMCredentials(
-        base_url=x_llm_base_url,
-        model=x_llm_model,
-        api_key=x_llm_api_key,
-        enable_thinking=_parse_bool(x_llm_enable_thinking, default=True),
-    )
-
-
-def extract_optional_llm_credentials(
-    x_llm_base_url: Annotated[str | None, Header(alias="X-LLM-Base-Url")] = None,
-    x_llm_model: Annotated[str | None, Header(alias="X-LLM-Model")] = None,
-    x_llm_api_key: Annotated[str | None, Header(alias="X-LLM-Api-Key")] = None,
-    x_llm_enable_thinking: Annotated[str | None, Header(alias="X-LLM-Enable-Thinking")] = None,
-) -> LLMCredentials | None:
-    """Parse optional LLM settings when provided, returning None when omitted."""
-    if not (x_llm_base_url or x_llm_model or x_llm_api_key):
-        return None
-    return extract_llm_credentials(
-        x_llm_base_url=x_llm_base_url,
-        x_llm_model=x_llm_model,
-        x_llm_api_key=x_llm_api_key,
-        x_llm_enable_thinking=x_llm_enable_thinking,
-    )

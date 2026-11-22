@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
@@ -13,7 +14,10 @@ from langchain_core.messages import BaseMessage
 from langchain_core.outputs import ChatGenerationChunk, ChatResult
 from langchain_openai import ChatOpenAI
 
+from backend.app.shared.errors import LLMUpstreamError
 from backend.app.shared.llm_credentials import LLMCredentials
+
+logger = logging.getLogger(__name__)
 
 
 def _extract_reasoning(obj: object) -> str | None:
@@ -42,6 +46,13 @@ class ReasoningChatOpenAI(ChatOpenAI):
             return False
         remaining = {k: v for k, v in self.extra_body.items() if k != "enable_thinking"}
         self.extra_body = remaining or None
+        logger.info(
+            "agent.enable_thinking_fallback",
+            extra={
+                "event": "agent.enable_thinking_fallback",
+                "model": self.model_name,
+            },
+        )
         return True
 
     async def _agenerate(
@@ -143,7 +154,10 @@ class ReasoningChatOpenAI(ChatOpenAI):
 
 
 class ModelFactory:
-    """Constructs OpenAI-compatible chat models from per-request UI credentials."""
+    """Constructs OpenAI-compatible chat models and checks endpoint health."""
+
+    def __init__(self, *, http_transport: httpx.AsyncBaseTransport | None = None) -> None:
+        self._http_transport = http_transport
 
     def build(self, creds: LLMCredentials) -> BaseChatModel:
         extra_body: dict[str, Any] | None = (
@@ -159,3 +173,57 @@ class ModelFactory:
             http_client=httpx.Client(trust_env=False, timeout=120.0),
             http_async_client=httpx.AsyncClient(trust_env=False, timeout=120.0),
         )
+
+    async def ping_llm(self, creds: LLMCredentials) -> dict[str, object]:
+        """Verify OpenAI-compatible endpoint reachability without logging credentials."""
+        models_url = f"{creds.base_url}/models"
+        headers = {"Authorization": f"Bearer {creds.api_key}"}
+        try:
+            async with httpx.AsyncClient(
+                transport=self._http_transport,
+                trust_env=False,
+                timeout=10.0,
+            ) as client:
+                resp = await client.get(models_url, headers=headers)
+                if resp.status_code in {404, 405}:
+                    resp = await client.post(
+                        f"{creds.base_url}/chat/completions",
+                        headers=headers,
+                        json={
+                            "model": creds.model,
+                            "messages": [{"role": "user", "content": "ping"}],
+                            "max_tokens": 1,
+                        },
+                    )
+        except httpx.HTTPError as exc:
+            msg = creds.redact_secrets(
+                f"Failed to connect to {creds.base_url}: {type(exc).__name__}"
+            )
+            logger.warning(
+                "llm.ping_failed",
+                extra={
+                    "event": "llm.ping_failed",
+                    "base_url": creds.base_url,
+                    "model": creds.model,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise LLMUpstreamError(msg) from exc
+
+        if resp.status_code >= 400:
+            snippet = creds.redact_secrets(resp.text[:240].strip())
+            detail_suffix = f": {snippet}" if snippet else ""
+            logger.warning(
+                "llm.ping_http_error",
+                extra={
+                    "event": "llm.ping_http_error",
+                    "base_url": creds.base_url,
+                    "model": creds.model,
+                    "status_code": resp.status_code,
+                },
+            )
+            raise LLMUpstreamError(
+                f"LLM endpoint returned HTTP {resp.status_code}{detail_suffix}",
+                details={"status_code": resp.status_code},
+            )
+        return {"ok": True, "base_url": creds.base_url, "model": creds.model}

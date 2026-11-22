@@ -18,7 +18,7 @@ from deepagents.backends.protocol import (
     ReadResult,
     WriteResult,
 )
-from deepagents.backends.utils import create_file_data, file_data_to_string, slice_read_response
+from deepagents.backends.utils import create_file_data, slice_read_response
 
 from backend.app.domains.agent.run_context import RunContext
 
@@ -216,7 +216,3 @@ class SkillFiles(BackendProtocol):
 
     async def aupload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
         return self.upload_files(files)
-
-
-def read_skill_file_text(skill_path: Path) -> str:
-    return file_data_to_string(create_file_data(skill_path.read_text(encoding="utf-8")))

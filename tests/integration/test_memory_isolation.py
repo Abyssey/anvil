@@ -14,8 +14,8 @@ from deepagents.middleware.summarization import SummarizationMiddleware
 from fastapi.testclient import TestClient
 from langchain_core.messages import SystemMessage
 
-from backend.app.domains.agent.backend_factory import DynamicGuardedShellBackend, DynamicRunBackend
 from backend.app.domains.agent.model_adapter import ModelFactory
+from backend.app.domains.agent.run_backends import DynamicGuardedShellBackend, DynamicRunBackend
 from backend.app.domains.agent.run_context import RunCatalog, RunContext
 from backend.app.domains.agent.shell_guard import ShellGuard
 from backend.app.main import create_app

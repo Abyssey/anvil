@@ -2,20 +2,22 @@
 
 from __future__ import annotations
 
-import json
 import shutil
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
 from backend.app.domains.artifacts.entities import (
     ArtifactDoc,
     ArtifactKind,
+    FileDiff,
     FileHunks,
     WalkthroughChunk,
     WalkthroughPlan,
 )
 from backend.app.domains.artifacts.walkthrough_diff import (
     ParsedFileDiff,
+    ParsedHunk,
     build_default_walkthrough_plan,
 )
 from backend.app.shared.errors import ArtifactNotFoundError, InvalidWorkspaceError, PathEscapeError
@@ -108,11 +110,31 @@ class ArtifactStore:
     def build_and_save_walkthrough_plan(
         self,
         session_id: str,
-        file_diffs: list[ParsedFileDiff],
+        file_diffs: Sequence[FileDiff],
         *,
         git_head: str = "",
     ) -> WalkthroughPlan:
-        parsed = build_default_walkthrough_plan(file_diffs, git_head=git_head)
+        parsed_diffs = [
+            ParsedFileDiff(
+                path=f.path,
+                status=f.status,
+                hunks=[
+                    ParsedHunk(
+                        path=h.path,
+                        name=h.name,
+                        old_start=h.old_start,
+                        old_count=h.old_count,
+                        new_start=h.new_start,
+                        new_count=h.new_count,
+                        header=h.header,
+                        lines=tuple(h.lines),
+                    )
+                    for h in f.hunks
+                ],
+            )
+            for f in file_diffs
+        ]
+        parsed = build_default_walkthrough_plan(parsed_diffs, git_head=git_head)
         plan = WalkthroughPlan(
             git_head=parsed.git_head,
             chunks=[
@@ -183,11 +205,3 @@ class ArtifactStore:
             else:
                 lines.append(f"- [ ] {content}")
         return "\n".join(lines).rstrip() + "\n"
-
-    @staticmethod
-    def ensure_walkthrough_json_safe(raw: str) -> WalkthroughPlan | None:
-        try:
-            data = json.loads(raw)
-        except ValueError:
-            return None
-        return WalkthroughPlan.model_validate(data)

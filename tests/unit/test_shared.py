@@ -19,8 +19,8 @@ from backend.app.shared.errors import (
     LLMSettingsRequiredError,
     PathEscapeError,
     SessionNotFoundError,
-    register_exception_handlers,
 )
+from backend.app.shared.http import register_exception_handlers
 from backend.app.shared.llm_credentials import LLMCredentials
 from tests.fakes.fake_chat_model import ScriptedReasoningChatModel, ScriptedTurn
 
@@ -32,6 +32,10 @@ def test_app_config_creates_data_directories(tmp_path: Path) -> None:
     assert cfg.data_dir.is_dir()
     assert cfg.artifacts_root.is_dir()
     assert cfg.sqlite_path == tmp_path / ".abyss-data" / "abyss.db"
+    assert cfg.bundled_skills_dir.parts[-4:] == ("domains", "skills", "builtin") or (
+        cfg.bundled_skills_dir.parts[-3:] == ("domains", "skills", "builtin")
+    )
+    assert (cfg.bundled_skills_dir / "codebase-onboarding" / "SKILL.md").is_file()
 
 
 def test_create_app_defers_directory_creation_to_lifespan_and_fastapi_cli_works(

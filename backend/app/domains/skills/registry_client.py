@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 import re
 import tarfile
 from collections.abc import Mapping
@@ -28,6 +29,8 @@ from backend.app.shared.errors import DomainError
 
 SKILLS_SH_BASE_URL = "https://skills.sh"
 CODELOAD_BASE_URL = "https://codeload.github.com"
+
+logger = logging.getLogger(__name__)
 
 MAX_ARCHIVE_BYTES = 25 * 1024 * 1024  # 25 MiB compressed tarball download cap
 MAX_EXTRACTED_BYTES = 10 * 1024 * 1024  # 10 MiB total extracted skill payload cap
@@ -175,6 +178,14 @@ def extract_skill_from_tar_bytes(
             for member in members:
                 # Reject symlinks, hardlinks, FIFOs, and char/block devices unconditionally.
                 if member.issym() or member.islnk() or member.isfifo() or member.isdev():
+                    logger.warning(
+                        "skills.archive_rejected",
+                        extra={
+                            "event": "skills.archive_rejected",
+                            "source": clean_source,
+                            "reason": "disallowed_member_type",
+                        },
+                    )
                     raise DomainError(
                         "Skill archive contains disallowed symlink or special file.",
                         status_code=400,
@@ -291,6 +302,14 @@ def extract_skill_from_tar_bytes(
                 total_bytes += len(data)
                 files[inner_rel] = data
     except (tarfile.TarError, OSError, EOFError) as exc:
+        logger.warning(
+            "skills.archive_corrupt",
+            extra={
+                "event": "skills.archive_corrupt",
+                "source": clean_source,
+                "error_type": type(exc).__name__,
+            },
+        )
         raise DomainError(
             f"Failed to read skill archive: {exc}",
             status_code=400,
@@ -437,6 +456,14 @@ class SkillsShClient:
             async with self._new_client() as client:
                 resp = await client.get(url)
         except httpx.HTTPError as exc:
+            logger.warning(
+                "skills.registry_unavailable",
+                extra={
+                    "event": "skills.registry_unavailable",
+                    "operation": "browse",
+                    "error_type": type(exc).__name__,
+                },
+            )
             raise DomainError(
                 f"Failed to reach skills.sh catalog: {exc}",
                 status_code=502,
@@ -444,6 +471,14 @@ class SkillsShClient:
             ) from exc
 
         if resp.status_code != 200:
+            logger.warning(
+                "skills.registry_http_error",
+                extra={
+                    "event": "skills.registry_http_error",
+                    "operation": "browse",
+                    "status_code": resp.status_code,
+                },
+            )
             raise DomainError(
                 f"skills.sh catalog returned HTTP {resp.status_code}.",
                 status_code=502,
@@ -494,6 +529,14 @@ class SkillsShClient:
             async with self._new_client() as client:
                 resp = await client.get(url, params={"q": clean_q, "limit": str(safe_limit)})
         except httpx.HTTPError as exc:
+            logger.warning(
+                "skills.registry_unavailable",
+                extra={
+                    "event": "skills.registry_unavailable",
+                    "operation": "search",
+                    "error_type": type(exc).__name__,
+                },
+            )
             raise DomainError(
                 f"Failed to search skills.sh: {exc}",
                 status_code=502,
@@ -501,6 +544,14 @@ class SkillsShClient:
             ) from exc
 
         if resp.status_code != 200:
+            logger.warning(
+                "skills.registry_http_error",
+                extra={
+                    "event": "skills.registry_http_error",
+                    "operation": "search",
+                    "status_code": resp.status_code,
+                },
+            )
             raise DomainError(
                 f"skills.sh search returned HTTP {resp.status_code}.",
                 status_code=502,
@@ -538,6 +589,14 @@ class SkillsShClient:
                         code="SKILL_REPO_NOT_FOUND",
                     )
                 if resp.status_code != 200:
+                    logger.warning(
+                        "skills.archive_download_failed",
+                        extra={
+                            "event": "skills.archive_download_failed",
+                            "source": clean_source,
+                            "status_code": resp.status_code,
+                        },
+                    )
                     raise DomainError(
                         f"Archive download failed for '{clean_source}' (HTTP {resp.status_code}).",
                         status_code=502,
@@ -566,6 +625,14 @@ class SkillsShClient:
         except DomainError:
             raise
         except httpx.HTTPError as exc:
+            logger.warning(
+                "skills.archive_download_error",
+                extra={
+                    "event": "skills.archive_download_error",
+                    "source": clean_source,
+                    "error_type": type(exc).__name__,
+                },
+            )
             raise DomainError(
                 f"Failed to download archive for '{clean_source}': {exc}",
                 status_code=502,

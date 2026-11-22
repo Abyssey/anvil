@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, NotRequired
 
 from langchain.agents.middleware import AgentMiddleware, hook_config
@@ -14,18 +12,12 @@ from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.runtime import Runtime
 from langgraph.types import Command, interrupt
 
+from backend.app.domains.agent.run_context import RunContext
+from backend.app.domains.agent.shell_guard import ShellAction
 from backend.app.domains.artifacts.entities import ArtifactKind
 from backend.app.domains.artifacts.store import ArtifactStore
 
 _MUTATING_WORKSPACE_TOOLS = frozenset({"write_file", "edit_file", "delete"})
-
-
-@dataclass(frozen=True)
-class ArtifactRunInfo:
-    session_id: str
-    workspace_path: Path
-    mode: str
-    artifacts_dir: Path
 
 
 class ArtifactWorkflowState(AgentState[Any]):
@@ -39,24 +31,16 @@ class ArtifactWorkflowMiddleware(AgentMiddleware[ArtifactWorkflowState, Any, Any
 
     state_schema = ArtifactWorkflowState
 
-    def __init__(
-        self,
-        *,
-        artifact_store: ArtifactStore,
-        get_run_info: Callable[[], ArtifactRunInfo | None],
-        evaluate_shell: Callable[[str, str], tuple[str, str]],
-    ) -> None:
+    def __init__(self, *, artifact_store: ArtifactStore) -> None:
         self._store = artifact_store
-        self._get_run_info = get_run_info
-        self._evaluate_shell = evaluate_shell
 
     async def awrap_tool_call(
         self,
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command]],
     ) -> ToolMessage | Command:
-        info = self._get_run_info()
-        if info is None:
+        catalog = RunContext.current_or_none()
+        if catalog is None:
             return await handler(request)
 
         tool_name = str(request.tool_call.get("name") or "")
@@ -70,7 +54,7 @@ class ArtifactWorkflowMiddleware(AgentMiddleware[ArtifactWorkflowState, Any, Any
                 md = self._store.render_todos_markdown(
                     [t for t in todos if isinstance(t, Mapping)]
                 )
-                self._store.write_artifact(info.session_id, ArtifactKind.TASK, md)
+                self._store.write_artifact(catalog.session_id, ArtifactKind.TASK, md)
             return result
 
         if tool_name in _MUTATING_WORKSPACE_TOOLS:
@@ -83,7 +67,7 @@ class ArtifactWorkflowMiddleware(AgentMiddleware[ArtifactWorkflowState, Any, Any
                 normalized_path == "/memories/project"
                 or normalized_path.startswith("/memories/project/")
             )
-            if info.mode == "ask" and is_memory_write:
+            if catalog.mode == "ask" and is_memory_write:
                 return ToolMessage(
                     content="Project memory is read-only in Ask mode.",
                     name=tool_name,
@@ -91,7 +75,7 @@ class ArtifactWorkflowMiddleware(AgentMiddleware[ArtifactWorkflowState, Any, Any
                     status="error",
                 )
             if (
-                info.mode == "plan"
+                catalog.mode == "plan"
                 and not is_artifact_write
                 and not request.state.get("plan_approved", False)
             ):
@@ -114,28 +98,28 @@ class ArtifactWorkflowMiddleware(AgentMiddleware[ArtifactWorkflowState, Any, Any
 
         if tool_name == "execute":
             command = str(args.get("command") or "")
-            if info.mode == "plan" and not request.state.get("plan_approved", False):
+            if catalog.mode == "plan" and not request.state.get("plan_approved", False):
                 return ToolMessage(
                     content="Plan approval required before executing shell commands.",
                     name="execute",
                     tool_call_id=tool_call_id,
                     status="error",
                 )
-            action, reason = self._evaluate_shell(command, info.mode)
-            if action == "block":
+            verdict = catalog.shell_guard.evaluate(command, catalog.mode)
+            if verdict.action == ShellAction.BLOCK:
                 return ToolMessage(
-                    content=f"Command blocked: {reason}",
+                    content=f"Command blocked: {verdict.reason}",
                     name="execute",
                     tool_call_id=tool_call_id,
                     status="error",
                 )
-            if action == "require_approval":
+            if verdict.action == ShellAction.REQUIRE_APPROVAL:
                 decision = interrupt(
                     {
                         "kind": "shell_approval",
                         "command": command,
-                        "workspace": str(info.workspace_path),
-                        "reason": reason,
+                        "workspace": str(catalog.workspace_path),
+                        "reason": verdict.reason,
                         "summary": f"Approve shell command: {command}",
                     }
                 )
@@ -157,19 +141,19 @@ class ArtifactWorkflowMiddleware(AgentMiddleware[ArtifactWorkflowState, Any, Any
         state: ArtifactWorkflowState,
         runtime: Runtime[Any],
     ) -> dict[str, Any] | None:
-        info = self._get_run_info()
-        if info is None:
+        catalog = RunContext.current_or_none()
+        if catalog is None:
             return None
 
-        if info.mode == "plan" and not state.get("plan_approved", False):
-            plan_path = info.artifacts_dir / "implementation_plan.md"
+        if catalog.mode == "plan" and not state.get("plan_approved", False):
+            plan_path = catalog.artifacts_dir / "implementation_plan.md"
             if not plan_path.is_file():
                 fallback = (
                     self._last_assistant_text(state)
                     or "# Implementation Plan\nPending review."
                 )
                 self._store.write_artifact(
-                    info.session_id,
+                    catalog.session_id,
                     ArtifactKind.IMPLEMENTATION_PLAN,
                     fallback,
                 )
@@ -220,13 +204,13 @@ class ArtifactWorkflowMiddleware(AgentMiddleware[ArtifactWorkflowState, Any, Any
                 "jump_to": "model",
             }
 
-        if info.mode == "ask":
-            walkthrough_path = info.artifacts_dir / "walkthrough.md"
+        if catalog.mode == "ask":
+            walkthrough_path = catalog.artifacts_dir / "walkthrough.md"
             if not walkthrough_path.is_file():
                 final_text = self._last_assistant_text(state)
                 if final_text:
                     self._store.write_artifact(
-                        info.session_id,
+                        catalog.session_id,
                         ArtifactKind.WALKTHROUGH,
                         final_text,
                     )

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 import os
 from pathlib import Path
 
@@ -24,7 +23,7 @@ from deepagents.backends.protocol import (
 
 from backend.app.domains.agent.run_context import RunCatalog, RunContext
 from backend.app.domains.agent.shell_guard import ShellAction
-from backend.app.domains.agent.skills import SkillFiles
+from backend.app.domains.agent.skill_backend import SkillFiles
 
 
 def _safe_shell_env() -> dict[str, str]:
@@ -51,16 +50,6 @@ def _is_artifacts_path(path: str) -> bool:
 def _is_project_memory_path(path: str) -> bool:
     clean = _normalize_virtual_path(path)
     return clean == "/memories/project" or clean.startswith("/memories/project/")
-
-
-def _build_skill_files(
-    bundled_skills_dir: Path,
-    global_skills_dir: Path | None,
-) -> SkillFiles:
-    params = inspect.signature(SkillFiles.__init__).parameters
-    if "global_skills_dir" in params:
-        return SkillFiles(bundled_skills_dir, global_skills_dir=global_skills_dir)  # type: ignore[call-arg]
-    return SkillFiles(bundled_skills_dir)
 
 
 class _UnavailableMemoryBackend(BackendProtocol):
@@ -185,7 +174,7 @@ class DynamicRunBackend(CompositeBackend):
         self._bundled_skills_dir = bundled_skills_dir
         self._global_skills_dir = global_skills_dir
         self._read_only_workspace = read_only_workspace
-        self._skill_files = _build_skill_files(bundled_skills_dir, global_skills_dir)
+        self._skill_files = SkillFiles(bundled_skills_dir, global_skills_dir=global_skills_dir)
         super().__init__(
             default=default_placeholder or _DynamicRoutePlaceholder(),
             routes={
