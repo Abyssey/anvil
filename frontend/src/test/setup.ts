@@ -22,3 +22,18 @@ if (typeof HTMLDialogElement !== "undefined") {
 if (typeof Element !== "undefined" && !Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = () => undefined;
 }
+
+if (typeof globalThis.IntersectionObserver === "undefined") {
+  class MockIntersectionObserver implements IntersectionObserver {
+    readonly root: Element | Document | null = null;
+    readonly rootMargin = "0px";
+    readonly thresholds: ReadonlyArray<number> = [0];
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+    takeRecords(): IntersectionObserverEntry[] {
+      return [];
+    }
+  }
+  globalThis.IntersectionObserver = MockIntersectionObserver;
+}

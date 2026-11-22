@@ -3,6 +3,7 @@ import type {
   ArtifactKind,
   DirectoryBrowseResponse,
   FilePreview,
+  MessagePageResponse,
   Project,
   RunMode,
   Session,
@@ -136,8 +137,23 @@ export const apiClient = {
     });
   },
 
-  getSession(sessionId: string): Promise<SessionDetail> {
-    return fetchJson(`/api/sessions/${encodeURIComponent(sessionId)}`);
+  getSession(sessionId: string, limit = 20): Promise<SessionDetail> {
+    const qs = new URLSearchParams({ limit: String(limit) });
+    return fetchJson(`/api/sessions/${encodeURIComponent(sessionId)}?${qs.toString()}`);
+  },
+
+  listMessagesPage(
+    sessionId: string,
+    beforeId?: string,
+    limit = 20,
+  ): Promise<MessagePageResponse> {
+    const qs = new URLSearchParams({ limit: String(limit) });
+    if (beforeId) {
+      qs.set("before_id", beforeId);
+    }
+    return fetchJson(
+      `/api/sessions/${encodeURIComponent(sessionId)}/messages?${qs.toString()}`,
+    );
   },
 
   updateSession(

@@ -98,8 +98,8 @@ describe("App + LiveWorkspaceProvider end-to-end integration", () => {
         if (url === "/api/sessions" && (!init?.method || init.method === "GET")) {
           return jsonResponse([session]);
         }
-        if (url === "/api/sessions/sess-live") {
-          return jsonResponse({ session, messages: storedMessages });
+        if (url === "/api/sessions/sess-live" || url.startsWith("/api/sessions/sess-live?")) {
+          return jsonResponse({ session, messages: storedMessages, has_more_messages: false });
         }
         if (url === "/api/sessions/sess-live/artifacts") {
           return jsonResponse({ artifacts: storedArtifacts, walkthrough_plan: null });
@@ -213,5 +213,127 @@ describe("App + LiveWorkspaceProvider end-to-end integration", () => {
         "true",
       );
     });
+  });
+
+  it("loads older messages automatically on scroll-to-top via cursor pagination without a button", async () => {
+    const project = {
+      id: "proj-page",
+      name: "repo",
+      path: "/repo",
+      is_git_repo: true,
+      branch: "main",
+      created_at: "2026-11-22T00:00:00Z",
+      updated_at: "2026-11-22T00:00:00Z",
+    };
+    const session = {
+      id: "sess-page",
+      project_id: "proj-page",
+      title: "Long Chat",
+      workspace_path: "/repo",
+      mode: "ask" as const,
+      status: "idle" as const,
+      pending_interrupt: null,
+      created_at: "2026-11-22T00:00:00Z",
+      updated_at: "2026-11-22T00:00:00Z",
+    };
+
+    const pageUrls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/projects") return jsonResponse([project]);
+        if (url === "/api/sessions") return jsonResponse([session]);
+        if (url.startsWith("/api/workspace/tree")) return jsonResponse([]);
+        if (url.startsWith("/api/workspace/validate")) {
+          return jsonResponse({ path: "/repo", name: "repo", is_git_repo: true, branch: "main" });
+        }
+        if (url.startsWith("/api/workspace/diff")) {
+          return jsonResponse({ workspace_path: "/repo", branch: "main", git_head: "abc", files: [] });
+        }
+        if (url === "/api/sessions/sess-page/artifacts") {
+          return jsonResponse({ artifacts: [], walkthrough_plan: null });
+        }
+        if (url.startsWith("/api/sessions/sess-page?")) {
+          return jsonResponse({
+            session,
+            has_more_messages: true,
+            messages: [
+              {
+                id: "m-21",
+                session_id: "sess-page",
+                role: "user",
+                content: "Recent message 21",
+                thinking: "",
+                tool_calls: [],
+                created_at: "2026-11-22T00:01:00Z",
+              },
+              {
+                id: "m-22",
+                session_id: "sess-page",
+                role: "assistant",
+                content: "Recent answer 22",
+                thinking: "",
+                tool_calls: [],
+                created_at: "2026-11-22T00:01:01Z",
+              },
+            ],
+          });
+        }
+        if (url.startsWith("/api/sessions/sess-page/messages?")) {
+          pageUrls.push(url);
+          return jsonResponse({
+            has_more: false,
+            messages: [
+              {
+                id: "m-1",
+                session_id: "sess-page",
+                role: "user",
+                content: "Oldest message 1",
+                thinking: "",
+                tool_calls: [],
+                created_at: "2026-11-22T00:00:01Z",
+              },
+            ],
+          });
+        }
+        return jsonResponse({});
+      }),
+    );
+
+    render(
+      <Theme theme={themes[defaultThemeSlug]}>
+        <App />
+      </Theme>,
+    );
+
+    await screen.findByText("Recent answer 22");
+    expect(screen.queryByRole("button", { name: /new messages/i })).not.toBeInTheDocument();
+
+    // Wait for requestAnimationFrame arming, then trigger scroll at top on ChatLayout
+    await act(async () => {
+      await new Promise((r) => window.requestAnimationFrame(() => r(undefined)));
+    });
+    const log = screen.getByRole("log");
+    const scroller = log.closest(".astryx-chat-layout") as HTMLElement | null;
+    expect(scroller).not.toBeNull();
+    let simulatedHeight = 800;
+    if (scroller) {
+      Object.defineProperty(scroller, "scrollHeight", {
+        get: () => simulatedHeight,
+        configurable: true,
+      });
+      Object.defineProperty(scroller, "scrollTop", {
+        value: 0,
+        writable: true,
+        configurable: true,
+      });
+      fireEvent.scroll(scroller);
+      simulatedHeight = 1450;
+    }
+
+    await screen.findByText("Oldest message 1");
+    expect(pageUrls.some((u) => u.includes("before_id=m-21"))).toBe(true);
+    expect(scroller?.scrollTop).toBe(650);
   });
 });

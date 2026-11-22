@@ -50,6 +50,8 @@ function makeMockValue(
     sessions: [baseSession],
     activeSession: baseSession,
     messages: [],
+    hasMoreMessages: false,
+    isLoadingOlderMessages: false,
     streamingAssistant: null,
     isStreaming: false,
     mode: "ask",
@@ -81,6 +83,7 @@ function makeMockValue(
     setWorkspacePath: vi.fn().mockResolvedValue(undefined),
     setMode: vi.fn().mockResolvedValue(undefined),
     sendMessage: vi.fn().mockResolvedValue(undefined),
+    loadOlderMessages: vi.fn().mockResolvedValue(undefined),
     stopStream: vi.fn(),
     resumeInterrupt: vi.fn().mockResolvedValue(undefined),
     openRightDrawer: vi.fn(),
@@ -291,6 +294,38 @@ describe("Abyss Workspace UI (Astryx + HITL)", () => {
 
     expect(screen.queryByRole("button", { name: /collapse/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Add Project/i })).toBeInTheDocument();
+    expect(screen.getByRole("separator", { name: /Resize projects sidebar/i })).toBeInTheDocument();
+  });
+
+  it("never renders a New messages button and shows Loading older messages indicator while paginating", () => {
+    const val = makeMockValue({
+      hasMoreMessages: true,
+      isLoadingOlderMessages: true,
+      messages: [
+        {
+          id: "m1",
+          session_id: "sess-1",
+          role: "user",
+          content: "First visible turn",
+          thinking: "",
+          tool_calls: [],
+          created_at: "2026-11-22T00:00:00Z",
+        },
+        {
+          id: "m2",
+          session_id: "sess-1",
+          role: "assistant",
+          content: "Latest reply",
+          thinking: "",
+          tool_calls: [],
+          created_at: "2026-11-22T00:00:01Z",
+        },
+      ],
+    });
+    renderWorkspace(val);
+
+    expect(screen.queryByRole("button", { name: /new messages/i })).not.toBeInTheDocument();
+    expect(screen.getByText("Loading older messages...")).toBeInTheDocument();
   });
 
   it("filters project files and switches to dedicated file preview with Back to Files", async () => {

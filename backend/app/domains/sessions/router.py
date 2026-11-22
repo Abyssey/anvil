@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterable
-from typing import Literal
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Query, status
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, Field
 
@@ -36,6 +36,12 @@ class UpdateSessionRequest(BaseModel):
 class SessionDetailResponse(BaseModel):
     session: Session
     messages: list[ChatMessage]
+    has_more_messages: bool = False
+
+
+class MessagePageResponse(BaseModel):
+    messages: list[ChatMessage]
+    has_more: bool = False
 
 
 class StreamMessageRequest(BaseModel):
@@ -91,9 +97,29 @@ async def create_session(
 async def get_session(
     session_id: str,
     service: SessionServiceDep,
+    limit: Annotated[int, Query(ge=1, le=200)] = 20,
 ) -> SessionDetailResponse:
-    session, messages = await service.get_session_detail(session_id)
-    return SessionDetailResponse(session=session, messages=messages)
+    session, messages, has_more = await service.get_session_detail_page(session_id, limit=limit)
+    return SessionDetailResponse(
+        session=session,
+        messages=messages,
+        has_more_messages=has_more,
+    )
+
+
+@router.get("/{session_id}/messages")
+async def list_session_messages(
+    session_id: str,
+    service: SessionServiceDep,
+    before_id: Annotated[str | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 20,
+) -> MessagePageResponse:
+    messages, has_more = await service.list_messages_page(
+        session_id,
+        before_id=before_id,
+        limit=limit,
+    )
+    return MessagePageResponse(messages=messages, has_more=has_more)
 
 
 @router.patch("/{session_id}")

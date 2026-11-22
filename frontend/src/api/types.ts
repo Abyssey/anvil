@@ -69,6 +69,12 @@ export interface Session {
 export interface SessionDetail {
   session: Session;
   messages: ChatMessage[];
+  has_more_messages?: boolean;
+}
+
+export interface MessagePageResponse {
+  messages: ChatMessage[];
+  has_more: boolean;
 }
 
 export interface ArtifactDoc {

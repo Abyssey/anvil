@@ -621,3 +621,58 @@ def test_projects_crud_browse_legacy_migration_and_cascade_cleanup(tmp_path: Pat
         assert del_proj.status_code == 204
         assert client.get(f"/api/sessions/{sess_b['id']}").status_code == 404
         assert not art_dir.exists()
+
+
+def test_message_history_cursor_pagination_preserves_order_and_has_more(tmp_path: Path) -> None:
+    import sqlite3
+    from datetime import UTC, datetime, timedelta
+
+    workspace = tmp_path / "repo"
+    _init_workspace(workspace)
+    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=workspace)
+    model = ScriptedReasoningChatModel(turns=[ScriptedTurn(content="ok")])
+    app = create_app(config=cfg, model_factory=_FakeModelFactory(model))
+
+    with TestClient(app) as client:
+        sid = client.post(
+            "/api/sessions",
+            json={"workspace_path": str(workspace), "mode": "ask"},
+        ).json()["id"]
+
+        base_time = datetime(2026, 11, 22, 12, 0, 0, tzinfo=UTC)
+        conn = sqlite3.connect(cfg.sqlite_path)
+        for idx in range(1, 36):
+            ts = (base_time + timedelta(seconds=idx // 2)).isoformat()
+            conn.execute(
+                """
+                INSERT INTO messages (
+                    id, session_id, role, content, thinking, tool_calls_json, created_at
+                )
+                VALUES (?, ?, ?, ?, '', '[]', ?)
+                """,
+                (
+                    f"msg-{idx:02d}",
+                    sid,
+                    "user" if idx % 2 == 1 else "assistant",
+                    f"Message #{idx:02d}",
+                    ts,
+                ),
+            )
+        conn.commit()
+        conn.close()
+
+        page1 = client.get(f"/api/sessions/{sid}", params={"limit": 20}).json()
+        assert page1["has_more_messages"] is True
+        ids_1 = [m["id"] for m in page1["messages"]]
+        assert ids_1 == [f"msg-{i:02d}" for i in range(16, 36)]
+
+        page2_resp = client.get(
+            f"/api/sessions/{sid}/messages",
+            params={"before_id": ids_1[0], "limit": 20},
+        )
+        assert page2_resp.status_code == 200
+        page2 = page2_resp.json()
+        assert page2["has_more"] is False
+        ids_2 = [m["id"] for m in page2["messages"]]
+        assert ids_2 == [f"msg-{i:02d}" for i in range(1, 16)]
+        assert ids_2 + ids_1 == [f"msg-{i:02d}" for i in range(1, 36)]

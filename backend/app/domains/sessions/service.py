@@ -128,6 +128,29 @@ class SessionService:
         messages = await self._repo.list_messages(session_id)
         return session, messages
 
+    async def get_session_detail_page(
+        self,
+        session_id: str,
+        *,
+        limit: int = 20,
+    ) -> tuple[Session, list[ChatMessage], bool]:
+        session = await self._repo.get_session(session_id)
+        messages, has_more = await self._repo.list_messages_page(session_id, limit=limit)
+        return session, messages, has_more
+
+    async def list_messages_page(
+        self,
+        session_id: str,
+        *,
+        before_id: str | None = None,
+        limit: int = 20,
+    ) -> tuple[list[ChatMessage], bool]:
+        return await self._repo.list_messages_page(
+            session_id,
+            before_id=before_id,
+            limit=limit,
+        )
+
     async def update_session(
         self,
         session_id: str,

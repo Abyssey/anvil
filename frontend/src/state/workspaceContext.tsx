@@ -47,6 +47,8 @@ export interface WorkspaceState {
   sessions: Session[];
   activeSession: Session | null;
   messages: ChatMessage[];
+  hasMoreMessages: boolean;
+  isLoadingOlderMessages: boolean;
   streamingAssistant: StreamingAssistantDraft | null;
   isStreaming: boolean;
   mode: RunMode;
@@ -78,6 +80,7 @@ export interface WorkspaceActions {
   setWorkspacePath: (path: string) => Promise<void>;
   setMode: (mode: RunMode) => Promise<void>;
   sendMessage: (content: string) => Promise<void>;
+  loadOlderMessages: () => Promise<void>;
   stopStream: () => void;
   resumeInterrupt: (
     decision: "approve" | "revise" | "deny",
@@ -148,6 +151,8 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSession, setActiveSession] = useState<Session | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [hasMoreMessages, setHasMoreMessages] = useState(false);
+  const [isLoadingOlderMessages, setIsLoadingOlderMessages] = useState(false);
   const [streamingAssistant, setStreamingAssistant] =
     useState<StreamingAssistantDraft | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -165,15 +170,26 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
   const [treeRevision, setTreeRevision] = useState(0);
 
   const abortRef = useRef<AbortController | null>(null);
+  const loadingOlderRef = useRef(false);
+  const activeSessionRef = useRef<Session | null>(null);
+  const messagesRef = useRef<ChatMessage[]>([]);
+  const hasMoreMessagesRef = useRef(false);
+
+  activeSessionRef.current = activeSession;
+  messagesRef.current = messages;
+  hasMoreMessagesRef.current = hasMoreMessages;
 
   const loadSessionDetail = useCallback(
     async (sessionId: string, knownProjects?: Project[]) => {
+      loadingOlderRef.current = false;
+      setIsLoadingOlderMessages(false);
       const [detail, artBundle] = await Promise.all([
-        apiClient.getSession(sessionId),
+        apiClient.getSession(sessionId, 20),
         apiClient.listArtifacts(sessionId),
       ]);
       setActiveSession(detail.session);
       setMessages(detail.messages);
+      setHasMoreMessages(Boolean(detail.has_more_messages));
       setModeState(detail.session.mode);
       setWorkspacePathState(detail.session.workspace_path);
       setArtifacts(artBundle);
@@ -537,14 +553,28 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
         setTreeRevision((n) => n + 1);
         const [refreshedList, detail, artBundle, diffData] = await Promise.all([
           apiClient.listSessions().catch(() => sessions),
-          apiClient.getSession(targetSessionId).catch(() => null),
+          apiClient.getSession(targetSessionId, 20).catch(() => null),
           apiClient.listArtifacts(targetSessionId).catch(() => null),
           wsPath ? apiClient.getWorkspaceDiff(wsPath).catch(() => null) : Promise.resolve(null),
         ]);
         setSessions(refreshedList);
         if (detail) {
           setActiveSession(detail.session);
-          setMessages(detail.messages);
+          let keptOlderPrefix = false;
+          setMessages((prev) => {
+            const detailIds = new Set(detail.messages.map((m) => m.id));
+            const olderPrefix = prev.filter(
+              (m) =>
+                m.session_id === targetSessionId &&
+                !m.id.startsWith("local-") &&
+                !detailIds.has(m.id),
+            );
+            keptOlderPrefix = olderPrefix.length > 0;
+            return [...olderPrefix, ...detail.messages];
+          });
+          setHasMoreMessages((prevHasMore) =>
+            keptOlderPrefix ? prevHasMore : Boolean(detail.has_more_messages),
+          );
         }
         if (artBundle) {
           setArtifacts(artBundle);
@@ -597,6 +627,44 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
     },
     [isStreaming, settings, activeSession, projects, activeProjectId, workspacePath, mode, runSSEStream],
   );
+
+  const loadOlderMessages = useCallback(async () => {
+    const session = activeSessionRef.current;
+    const currentMessages = messagesRef.current;
+    if (
+      !session ||
+      loadingOlderRef.current ||
+      !hasMoreMessagesRef.current ||
+      currentMessages.length === 0
+    ) {
+      return;
+    }
+    const oldest = currentMessages.find((m) => !m.id.startsWith("local-"));
+    if (!oldest) {
+      return;
+    }
+    loadingOlderRef.current = true;
+    setIsLoadingOlderMessages(true);
+    try {
+      const page = await apiClient.listMessagesPage(session.id, oldest.id, 20);
+      if (activeSessionRef.current?.id !== session.id) {
+        return;
+      }
+      setMessages((prev) => {
+        const existingIds = new Set(prev.map((m) => m.id));
+        const olderUnique = page.messages.filter((m) => !existingIds.has(m.id));
+        return olderUnique.length > 0 ? [...olderUnique, ...prev] : prev;
+      });
+      setHasMoreMessages(page.has_more);
+    } catch (err) {
+      if (activeSessionRef.current?.id === session.id) {
+        setStreamError(err instanceof Error ? err.message : "Failed to load older messages");
+      }
+    } finally {
+      loadingOlderRef.current = false;
+      setIsLoadingOlderMessages(false);
+    }
+  }, []);
 
   const stopStream = useCallback(() => {
     abortRef.current?.abort();
@@ -662,6 +730,8 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
       sessions,
       activeSession,
       messages,
+      hasMoreMessages,
+      isLoadingOlderMessages,
       streamingAssistant,
       isStreaming,
       mode,
@@ -692,6 +762,7 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
       setWorkspacePath,
       setMode,
       sendMessage,
+      loadOlderMessages,
       stopStream,
       resumeInterrupt,
       openRightDrawer: setRightDrawerTab,

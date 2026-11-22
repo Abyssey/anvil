@@ -5,7 +5,6 @@ import { Icon } from "@astryxdesign/core/Icon";
 import { Layout, LayoutContent, LayoutPanel } from "@astryxdesign/core/Layout";
 import { ResizeHandle, useResizable } from "@astryxdesign/core/Resizable";
 import {
-  SideNav,
   SideNavHeading,
   SideNavItem,
   SideNavSection,
@@ -43,10 +42,17 @@ function sessionsForProject(sessions: Session[], project: Project): Session[] {
 
 export function WorkspaceShell() {
   const { state, actions, meta } = useWorkspace();
+  const sidebarResizable = useResizable({
+    defaultSize: 280,
+    minSize: 220,
+    maxSize: 520,
+    autoSaveId: "abyss.sidebar.width",
+  });
   const drawerResizable = useResizable({
     defaultSize: 460,
     minSize: 340,
     maxSize: 720,
+    autoSaveId: "abyss.drawer.width",
   });
 
   const dirtyCount = state.diff?.files.length ?? 0;
@@ -72,107 +78,130 @@ export function WorkspaceShell() {
           ]
         : [];
 
-  const sideNav = (
-    <SideNav
-      resizable={{ defaultWidth: 280, minWidth: 240, maxWidth: 360 }}
-      header={<SideNavHeading heading="Abyss" subheading="DeepAgents v2" />}
-      topContent={
-        <VStack gap={2}>
-          <Button
-            label="Add Project"
-            variant="primary"
-            width="100%"
-            icon={<Icon icon={FolderPlusIcon} size="sm" />}
-            onClick={actions.openAddProject}
-          />
-          {state.workspaceError && (
-            <Text type="supporting" color="secondary">
-              {state.workspaceError}
-            </Text>
-          )}
-        </VStack>
-      }
-      footer={
-        <Button
-          label={meta.configured ? state.settings.model : "Configure LLM"}
-          variant={meta.configured ? "secondary" : "primary"}
-          width="100%"
-          icon={<Icon icon={Cog6ToothIcon} size="sm" />}
-          onClick={actions.openSettings}
-        />
-      }
-    >
-      {displayProjects.map((project) => {
-        const projectSessions = sessionsForProject(state.sessions, project);
-        const isCurrentProject =
-          project.id === state.activeProjectId || project.path === state.workspacePath;
-        return (
-          <SideNavSection
-            key={project.id}
-            title={project.name}
-            subtitle={project.is_git_repo ? `git: ${project.branch}` : project.path}
-            endContent={
-              <HStack gap={0.5} vAlign="center">
-                <Button
-                  label={`New session in ${project.name}`}
-                  variant="ghost"
-                  size="sm"
-                  isIconOnly
-                  icon={<Icon icon={PlusIcon} size="sm" />}
-                  onClick={() => void actions.createNewSession(project.id)}
-                />
-                {state.projects.length > 1 && (
-                  <Button
-                    label={`Remove project ${project.name}`}
-                    variant="ghost"
-                    size="sm"
-                    isIconOnly
-                    icon={<Icon icon={TrashIcon} size="sm" />}
-                    onClick={() => void actions.removeProject(project.id)}
-                  />
-                )}
-              </HStack>
-            }
-          >
-            {projectSessions.length > 0 ? (
-              projectSessions.map((session) => (
-                <SideNavItem
-                  key={session.id}
-                  label={session.title}
-                  isSelected={session.id === state.activeSession?.id}
-                  endContent={
-                    <StatusDot
-                      variant={statusVariant(session.status)}
-                      label={session.status}
-                    />
-                  }
-                  actions={
-                    <Button
-                      label={`Delete ${session.title}`}
-                      variant="ghost"
-                      size="sm"
-                      isIconOnly
-                      icon={<Icon icon={TrashIcon} size="sm" />}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        void actions.removeSession(session.id);
-                      }}
-                    />
-                  }
-                  onClick={() => void actions.selectSession(session.id)}
-                />
-              ))
-            ) : (
-              <SideNavItem
-                label={`Open ${project.name}`}
-                isSelected={isCurrentProject}
-                onClick={() => void actions.selectProject(project.id)}
+  const sidebarPanel = (
+    <>
+      <LayoutPanel
+        resizable={sidebarResizable}
+        padding={0}
+        isScrollable={false}
+        role="navigation"
+        label="Side navigation"
+      >
+        <Layout
+          height="fill"
+          padding={0}
+          header={
+            <VStack gap={2} padding={3}>
+              <SideNavHeading heading="Abyss" subheading="DeepAgents v2" />
+              <Button
+                label="Add Project"
+                variant="primary"
+                width="100%"
+                icon={<Icon icon={FolderPlusIcon} size="sm" />}
+                onClick={actions.openAddProject}
               />
-            )}
-          </SideNavSection>
-        );
-      })}
-    </SideNav>
+              {state.workspaceError && (
+                <Text type="supporting" color="secondary">
+                  {state.workspaceError}
+                </Text>
+              )}
+            </VStack>
+          }
+          content={
+            <LayoutContent padding={2} isScrollable>
+              {displayProjects.map((project) => {
+                const projectSessions = sessionsForProject(state.sessions, project);
+                const isCurrentProject =
+                  project.id === state.activeProjectId || project.path === state.workspacePath;
+                return (
+                  <SideNavSection
+                    key={project.id}
+                    title={project.name}
+                    subtitle={project.is_git_repo ? `git: ${project.branch}` : project.path}
+                    endContent={
+                      <HStack gap={0.5} vAlign="center">
+                        <Button
+                          label={`New session in ${project.name}`}
+                          variant="ghost"
+                          size="sm"
+                          isIconOnly
+                          icon={<Icon icon={PlusIcon} size="sm" />}
+                          onClick={() => void actions.createNewSession(project.id)}
+                        />
+                        {state.projects.length > 1 && (
+                          <Button
+                            label={`Remove project ${project.name}`}
+                            variant="ghost"
+                            size="sm"
+                            isIconOnly
+                            icon={<Icon icon={TrashIcon} size="sm" />}
+                            onClick={() => void actions.removeProject(project.id)}
+                          />
+                        )}
+                      </HStack>
+                    }
+                  >
+                    {projectSessions.length > 0 ? (
+                      projectSessions.map((session) => (
+                        <SideNavItem
+                          key={session.id}
+                          label={session.title}
+                          isSelected={session.id === state.activeSession?.id}
+                          endContent={
+                            <StatusDot
+                              variant={statusVariant(session.status)}
+                              label={session.status}
+                            />
+                          }
+                          actions={
+                            <Button
+                              label={`Delete ${session.title}`}
+                              variant="ghost"
+                              size="sm"
+                              isIconOnly
+                              icon={<Icon icon={TrashIcon} size="sm" />}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void actions.removeSession(session.id);
+                              }}
+                            />
+                          }
+                          onClick={() => void actions.selectSession(session.id)}
+                        />
+                      ))
+                    ) : (
+                      <SideNavItem
+                        label={`Open ${project.name}`}
+                        isSelected={isCurrentProject}
+                        onClick={() => void actions.selectProject(project.id)}
+                      />
+                    )}
+                  </SideNavSection>
+                );
+              })}
+            </LayoutContent>
+          }
+          footer={
+            <VStack padding={3}>
+              <Button
+                label={meta.configured ? state.settings.model : "Configure LLM"}
+                variant={meta.configured ? "secondary" : "primary"}
+                width="100%"
+                icon={<Icon icon={Cog6ToothIcon} size="sm" />}
+                onClick={actions.openSettings}
+              />
+            </VStack>
+          }
+        />
+      </LayoutPanel>
+      <ResizeHandle
+        resizable={sidebarResizable}
+        direction="horizontal"
+        hasDivider
+        isAlwaysVisible
+        label="Resize projects sidebar"
+      />
+    </>
   );
 
   const drawerContent =
@@ -185,99 +214,116 @@ export function WorkspaceShell() {
     ) : null;
 
   return (
-    <AppShell height="fill" sideNav={sideNav}>
+    <AppShell height="fill">
       <Layout
         height="fill"
-        header={
-          <Toolbar
-            label="Workspace header"
-            dividers={["bottom"]}
-            startContent={
-              <HStack gap={2} vAlign="center">
-                <Text type="label" weight="semibold">
-                  {state.activeSession?.title ?? "New Session"}
-                </Text>
-                {state.workspaceInfo && (
-                  <Text type="supporting" color="secondary">
-                    {state.workspaceInfo.name}
-                  </Text>
-                )}
-                {state.workspaceInfo?.is_git_repo && state.workspaceInfo.branch && (
-                  <Badge label={state.workspaceInfo.branch} variant="neutral" />
-                )}
-              </HStack>
-            }
-            endContent={
-              <HStack gap={1} vAlign="center">
-                <Button
-                  label="Artifacts"
-                  variant={state.rightDrawerTab === "artifacts" ? "primary" : "ghost"}
-                  size="sm"
-                  onClick={() => toggleDrawer("artifacts")}
-                />
-                <Button
-                  label="Files"
-                  variant={state.rightDrawerTab === "files" ? "primary" : "ghost"}
-                  size="sm"
-                  onClick={() => toggleDrawer("files")}
-                />
-                <Button
-                  label="Diff"
-                  variant={state.rightDrawerTab === "diff" ? "primary" : "ghost"}
-                  size="sm"
-                  endContent={
-                    dirtyCount > 0 ? <Badge label={String(dirtyCount)} variant="info" /> : undefined
-                  }
-                  onClick={() => toggleDrawer("diff")}
-                />
-              </HStack>
-            }
-          />
-        }
+        padding={0}
+        start={sidebarPanel}
         content={
           <LayoutContent padding={0} isScrollable={false}>
-            <VStack height="100%" minHeight={0}>
-              <MessageStream />
-            </VStack>
-          </LayoutContent>
-        }
-        end={
-          state.rightDrawerTab ? (
-            <>
-              <ResizeHandle resizable={drawerResizable} isReversed hasDivider />
-              <LayoutPanel
-                resizable={drawerResizable}
-                padding={0}
-                isScrollable
-                label="Inspector drawer"
-              >
+            <Layout
+              height="fill"
+              header={
                 <Toolbar
-                  label="Drawer header"
+                  label="Workspace header"
                   dividers={["bottom"]}
                   startContent={
-                    <Text type="label" weight="semibold">
-                      {state.rightDrawerTab === "artifacts"
-                        ? "Artifacts"
-                        : state.rightDrawerTab === "files"
-                          ? "Files"
-                          : "Diff"}
-                    </Text>
+                    <HStack gap={2} vAlign="center">
+                      <Text type="label" weight="semibold">
+                        {state.activeSession?.title ?? "New Session"}
+                      </Text>
+                      {state.workspaceInfo && (
+                        <Text type="supporting" color="secondary">
+                          {state.workspaceInfo.name}
+                        </Text>
+                      )}
+                      {state.workspaceInfo?.is_git_repo && state.workspaceInfo.branch && (
+                        <Badge label={state.workspaceInfo.branch} variant="neutral" />
+                      )}
+                    </HStack>
                   }
                   endContent={
-                    <Button
-                      label="Close drawer"
-                      variant="ghost"
-                      size="sm"
-                      isIconOnly
-                      icon={<Icon icon={XMarkIcon} size="sm" />}
-                      onClick={() => actions.openRightDrawer(null)}
-                    />
+                    <HStack gap={1} vAlign="center">
+                      <Button
+                        label="Artifacts"
+                        variant={state.rightDrawerTab === "artifacts" ? "primary" : "ghost"}
+                        size="sm"
+                        onClick={() => toggleDrawer("artifacts")}
+                      />
+                      <Button
+                        label="Files"
+                        variant={state.rightDrawerTab === "files" ? "primary" : "ghost"}
+                        size="sm"
+                        onClick={() => toggleDrawer("files")}
+                      />
+                      <Button
+                        label="Diff"
+                        variant={state.rightDrawerTab === "diff" ? "primary" : "ghost"}
+                        size="sm"
+                        endContent={
+                          dirtyCount > 0 ? (
+                            <Badge label={String(dirtyCount)} variant="info" />
+                          ) : undefined
+                        }
+                        onClick={() => toggleDrawer("diff")}
+                      />
+                    </HStack>
                   }
                 />
-                {drawerContent}
-              </LayoutPanel>
-            </>
-          ) : undefined
+              }
+              content={
+                <LayoutContent padding={0} isScrollable={false}>
+                  <VStack height="100%" minHeight={0}>
+                    <MessageStream />
+                  </VStack>
+                </LayoutContent>
+              }
+              end={
+                state.rightDrawerTab ? (
+                  <>
+                    <ResizeHandle
+                      resizable={drawerResizable}
+                      isReversed
+                      hasDivider
+                      isAlwaysVisible
+                      label="Resize inspector drawer"
+                    />
+                    <LayoutPanel
+                      resizable={drawerResizable}
+                      padding={0}
+                      isScrollable
+                      label="Inspector drawer"
+                    >
+                      <Toolbar
+                        label="Drawer header"
+                        dividers={["bottom"]}
+                        startContent={
+                          <Text type="label" weight="semibold">
+                            {state.rightDrawerTab === "artifacts"
+                              ? "Artifacts"
+                              : state.rightDrawerTab === "files"
+                                ? "Files"
+                                : "Diff"}
+                          </Text>
+                        }
+                        endContent={
+                          <Button
+                            label="Close drawer"
+                            variant="ghost"
+                            size="sm"
+                            isIconOnly
+                            icon={<Icon icon={XMarkIcon} size="sm" />}
+                            onClick={() => actions.openRightDrawer(null)}
+                          />
+                        }
+                      />
+                      {drawerContent}
+                    </LayoutPanel>
+                  </>
+                ) : undefined
+              }
+            />
+          </LayoutContent>
         }
       />
     </AppShell>

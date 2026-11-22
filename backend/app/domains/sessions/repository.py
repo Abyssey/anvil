@@ -38,6 +38,13 @@ class SessionRepository(Protocol):
     async def delete_session(self, session_id: str) -> None: ...
     async def append_message(self, message: ChatMessage) -> ChatMessage: ...
     async def list_messages(self, session_id: str) -> list[ChatMessage]: ...
+    async def list_messages_page(
+        self,
+        session_id: str,
+        *,
+        before_id: str | None = None,
+        limit: int = 20,
+    ) -> tuple[list[ChatMessage], bool]: ...
 
 
 class SQLiteSessionRepository:
@@ -299,25 +306,74 @@ class SQLiteSessionRepository:
     async def list_messages(self, session_id: str) -> list[ChatMessage]:
         await self.get_session(session_id)
         async with self._connect() as db, db.execute(
-            "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC",
+            "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC, rowid ASC",
             (session_id,),
         ) as cursor:
             rows = await cursor.fetchall()
-        messages: list[ChatMessage] = []
-        for row in rows:
-            raw_tools = json.loads(row["tool_calls_json"])
-            messages.append(
-                ChatMessage(
-                    id=row["id"],
-                    session_id=row["session_id"],
-                    role=row["role"],
-                    content=row["content"],
-                    thinking=row["thinking"],
-                    tool_calls=[ToolCallRecord.model_validate(tc) for tc in raw_tools],
-                    created_at=datetime.fromisoformat(row["created_at"]),
-                )
-            )
-        return messages
+        return [self._row_to_message(row) for row in rows]
+
+    async def list_messages_page(
+        self,
+        session_id: str,
+        *,
+        before_id: str | None = None,
+        limit: int = 20,
+    ) -> tuple[list[ChatMessage], bool]:
+        await self.get_session(session_id)
+        async with self._connect() as db:
+            if before_id is not None:
+                async with db.execute(
+                    "SELECT created_at, rowid FROM messages WHERE session_id = ? AND id = ?",
+                    (session_id, before_id),
+                ) as cur:
+                    anchor = await cur.fetchone()
+                if anchor is None:
+                    return [], False
+                async with db.execute(
+                    """
+                    SELECT * FROM messages
+                    WHERE session_id = ?
+                      AND (created_at < ? OR (created_at = ? AND rowid < ?))
+                    ORDER BY created_at DESC, rowid DESC
+                    LIMIT ?
+                    """,
+                    (
+                        session_id,
+                        anchor["created_at"],
+                        anchor["created_at"],
+                        anchor["rowid"],
+                        limit + 1,
+                    ),
+                ) as cursor:
+                    rows = await cursor.fetchall()
+            else:
+                async with db.execute(
+                    """
+                    SELECT * FROM messages
+                    WHERE session_id = ?
+                    ORDER BY created_at DESC, rowid DESC
+                    LIMIT ?
+                    """,
+                    (session_id, limit + 1),
+                ) as cursor:
+                    rows = await cursor.fetchall()
+
+        has_more = len(rows) > limit
+        page_rows = list(reversed(rows[:limit]))
+        return [self._row_to_message(row) for row in page_rows], has_more
+
+    @staticmethod
+    def _row_to_message(row: aiosqlite.Row) -> ChatMessage:
+        raw_tools = json.loads(row["tool_calls_json"])
+        return ChatMessage(
+            id=row["id"],
+            session_id=row["session_id"],
+            role=row["role"],
+            content=row["content"],
+            thinking=row["thinking"],
+            tool_calls=[ToolCallRecord.model_validate(tc) for tc in raw_tools],
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
 
     @staticmethod
     def _row_to_project(row: aiosqlite.Row) -> Project:

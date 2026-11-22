@@ -1,3 +1,4 @@
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Avatar } from "@astryxdesign/core/Avatar";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
@@ -13,6 +14,7 @@ import { CodeBlock } from "@astryxdesign/core/CodeBlock";
 import { Collapsible } from "@astryxdesign/core/Collapsible";
 import { Heading } from "@astryxdesign/core/Heading";
 import { Markdown } from "@astryxdesign/core/Markdown";
+import { Spinner } from "@astryxdesign/core/Spinner";
 import { HStack, VStack } from "@astryxdesign/core/Stack";
 import { Text } from "@astryxdesign/core/Text";
 import type { ToolCallRecord } from "../../api/types";
@@ -48,6 +50,142 @@ function toChatToolCalls(records: ToolCallRecord[]): ChatToolCallItem[] {
 
 export function MessageStream() {
   const { state, actions, meta } = useWorkspace();
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+  const pendingScrollRestoreRef = useRef<{
+    prevHeight: number;
+    prevTop: number;
+    prevFirstId: string;
+    sawLoading: boolean;
+  } | null>(null);
+  const [isTopObserverArmed, setIsTopObserverArmed] = useState(false);
+
+  const sessionKey = state.activeSession?.id ?? "empty";
+  const firstMsgId = state.messages[0]?.id ?? "";
+  const lastMsgId = state.messages[state.messages.length - 1]?.id ?? "";
+  const streamingContentLen = state.streamingAssistant?.content.length ?? 0;
+  const streamingThinkingLen = state.streamingAssistant?.thinking.length ?? 0;
+  const streamingToolSig =
+    state.streamingAssistant?.toolCalls
+      .map((tc) => `${tc.id}:${tc.status}:${tc.output.length}`)
+      .join(",") ?? "";
+
+  const pending = state.activeSession?.pending_interrupt;
+  const pendingKind = pending?.kind ?? "";
+  const showInlinePlanReview =
+    pending?.kind === "plan_review" && state.rightDrawerTab !== "artifacts";
+  const hasContent =
+    state.messages.length > 0 || state.streamingAssistant !== null || Boolean(pending);
+
+  const isTopObserverArmedRef = useRef(isTopObserverArmed);
+  const hasMoreRef = useRef(state.hasMoreMessages);
+  const isLoadingOlderRef = useRef(state.isLoadingOlderMessages);
+  const firstMsgIdRef = useRef(firstMsgId);
+  isTopObserverArmedRef.current = isTopObserverArmed;
+  hasMoreRef.current = state.hasMoreMessages;
+  isLoadingOlderRef.current = state.isLoadingOlderMessages;
+  firstMsgIdRef.current = firstMsgId;
+
+  const triggerLoadOlder = useCallback(() => {
+    if (!isTopObserverArmedRef.current || !hasMoreRef.current || isLoadingOlderRef.current) {
+      return;
+    }
+    const el = chatScrollRef.current;
+    if (el) {
+      pendingScrollRestoreRef.current = {
+        prevHeight: el.scrollHeight,
+        prevTop: el.scrollTop,
+        prevFirstId: firstMsgIdRef.current,
+        sawLoading: false,
+      };
+    }
+    void actions.loadOlderMessages();
+  }, [actions]);
+
+  const handleScrollToTopAction = useCallback(async () => {
+    triggerLoadOlder();
+  }, [triggerLoadOlder]);
+
+  // Reset and arm the top-sentinel observer only after the session has settled at the bottom.
+  useLayoutEffect(() => {
+    setIsTopObserverArmed(false);
+    pendingScrollRestoreRef.current = null;
+    const el = chatScrollRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
+    const rafId = window.requestAnimationFrame(() => {
+      const target = chatScrollRef.current;
+      if (target) {
+        target.scrollTop = target.scrollHeight;
+      }
+      setIsTopObserverArmed(true);
+    });
+    return () => window.cancelAnimationFrame(rafId);
+  }, [sessionKey]);
+
+  // Always follow newly appended messages and streaming assistant responses at the bottom.
+  useLayoutEffect(() => {
+    if (pendingScrollRestoreRef.current) {
+      return;
+    }
+    const el = chatScrollRef.current;
+    if (!el) {
+      return;
+    }
+    el.scrollTop = el.scrollHeight;
+    const rafId = window.requestAnimationFrame(() => {
+      if (!pendingScrollRestoreRef.current && chatScrollRef.current) {
+        chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+      }
+    });
+    return () => window.cancelAnimationFrame(rafId);
+  }, [
+    sessionKey,
+    lastMsgId,
+    streamingContentLen,
+    streamingThinkingLen,
+    streamingToolSig,
+    pendingKind,
+  ]);
+
+  // Preserve visual scroll position when older messages are prepended above the viewport.
+  useLayoutEffect(() => {
+    const restore = pendingScrollRestoreRef.current;
+    if (!restore) {
+      return;
+    }
+    if (firstMsgId !== restore.prevFirstId) {
+      pendingScrollRestoreRef.current = null;
+      const el = chatScrollRef.current;
+      if (el) {
+        el.scrollTop = restore.prevTop + Math.max(0, el.scrollHeight - restore.prevHeight);
+      }
+    } else if (state.isLoadingOlderMessages) {
+      restore.sawLoading = true;
+    } else if (restore.sawLoading) {
+      pendingScrollRestoreRef.current = null;
+    }
+  }, [firstMsgId, state.messages.length, state.isLoadingOlderMessages]);
+
+  // Scroll-top fallback alongside Astryx's IntersectionObserver sentinel.
+  useEffect(() => {
+    const el = chatScrollRef.current;
+    if (!el) {
+      return;
+    }
+    const onScroll = () => {
+      if (
+        el.scrollTop <= 48 &&
+        isTopObserverArmedRef.current &&
+        hasMoreRef.current &&
+        !isLoadingOlderRef.current
+      ) {
+        triggerLoadOlder();
+      }
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [sessionKey, triggerLoadOlder]);
 
   const emptyState = (
     <VStack gap={4} hAlign="center" padding={6}>
@@ -78,20 +216,30 @@ export function MessageStream() {
     </VStack>
   );
 
-  const pending = state.activeSession?.pending_interrupt;
-  const showInlinePlanReview =
-    pending?.kind === "plan_review" && state.rightDrawerTab !== "artifacts";
-  const hasContent =
-    state.messages.length > 0 || state.streamingAssistant !== null || Boolean(pending);
-
   return (
     <ChatLayout
+      key={sessionKey}
+      ref={chatScrollRef}
       density="balanced"
+      scrollButton={null}
       composer={<Composer />}
       emptyState={!hasContent ? emptyState : undefined}
     >
       {hasContent ? (
-        <ChatMessageList isStreaming={state.isStreaming}>
+        <ChatMessageList
+          isStreaming={state.isStreaming}
+          scrollToTopAction={
+            state.hasMoreMessages && isTopObserverArmed ? handleScrollToTopAction : undefined
+          }
+        >
+          {state.isLoadingOlderMessages && (
+            <HStack gap={2} hAlign="center" vAlign="center" padding={2} role="status">
+              <Spinner size="sm" shade="subtle" aria-hidden="true" />
+              <Text type="supporting" color="secondary">
+                Loading older messages...
+              </Text>
+            </HStack>
+          )}
           {state.messages.map((msg) =>
             msg.role === "user" ? (
               <ChatMessage key={msg.id} sender="user">
