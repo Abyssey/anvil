@@ -285,4 +285,30 @@ describe("SkillsDialog", () => {
       expect(val.actions.refreshInstalledSkills).toHaveBeenCalled();
     });
   });
+
+  it("does not re-fetch installed skills when actions object identity changes while open", async () => {
+    const refreshInstalledSkills = vi.fn().mockResolvedValue(undefined);
+    const initialVal = makeSkillsMockValue({ skillsOpen: true }, { refreshInstalledSkills });
+    const { rerender } = renderSkillsDialog(initialVal);
+
+    await waitFor(() => {
+      expect(refreshInstalledSkills).toHaveBeenCalledTimes(1);
+    });
+
+    const nextVal = makeSkillsMockValue(
+      { skillsOpen: true, installedSkills: [...initialVal.state.installedSkills] },
+      { refreshInstalledSkills },
+    );
+    expect(nextVal.actions).not.toBe(initialVal.actions);
+
+    rerender(
+      <Theme theme={themes[defaultThemeSlug]}>
+        <WorkspaceProvider initialValue={nextVal}>
+          <SkillsDialog />
+        </WorkspaceProvider>
+      </Theme>,
+    );
+
+    expect(refreshInstalledSkills).toHaveBeenCalledTimes(1);
+  });
 });

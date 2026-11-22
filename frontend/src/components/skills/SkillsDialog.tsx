@@ -92,17 +92,19 @@ export function SkillsDialog() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
+  const { refreshInstalledSkills } = actions;
+
   useEffect(() => {
     if (state.skillsOpen) {
       setError(null);
       setNotice(null);
       setPendingDeleteKey(null);
-      void actions.refreshInstalledSkills();
+      void refreshInstalledSkills();
     } else {
       setPreview(null);
       setPendingDeleteKey(null);
     }
-  }, [state.skillsOpen, actions]);
+  }, [state.skillsOpen, refreshInstalledSkills]);
 
   const loadCatalog = useCallback(
     async (tab: CatalogTab, page = 0, append = false) => {

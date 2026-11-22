@@ -89,6 +89,8 @@ export function MessageStream() {
   isLoadingOlderRef.current = state.isLoadingOlderMessages;
   firstMsgIdRef.current = firstMsgId;
 
+  const { loadOlderMessages } = actions;
+
   const triggerLoadOlder = useCallback(() => {
     if (!isTopObserverArmedRef.current || !hasMoreRef.current || isLoadingOlderRef.current) {
       return;
@@ -102,8 +104,8 @@ export function MessageStream() {
         sawLoading: false,
       };
     }
-    void actions.loadOlderMessages();
-  }, [actions]);
+    void loadOlderMessages();
+  }, [loadOlderMessages]);
 
   const handleScrollToTopAction = useCallback(async () => {
     triggerLoadOlder();
