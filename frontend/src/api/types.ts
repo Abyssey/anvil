@@ -40,6 +40,75 @@ export interface Project {
   updated_at: string;
 }
 
+export interface ProjectMemory {
+  project_id: string;
+  content: string;
+  updated_at: string | null;
+  has_repo_agents_md: boolean;
+  max_bytes: number;
+}
+
+export type SkillScope = "bundled" | "global" | "workspace";
+export type CatalogTab = "all-time" | "trending" | "hot";
+
+export interface InstalledSkill {
+  name: string;
+  description: string;
+  scope: SkillScope;
+  source_label: string;
+  path: string;
+  deletable: boolean;
+  license?: string | null;
+  compatibility?: string | null;
+  origin_source?: string | null;
+  origin_skill_id?: string | null;
+  origin_url?: string | null;
+  installed_at?: string | null;
+}
+
+export interface InstalledSkillDetail extends InstalledSkill {
+  content: string;
+  files: string[];
+}
+
+export interface RemoteSkillSummary {
+  id: string;
+  source: string;
+  skill_id: string;
+  name: string;
+  installs: number;
+  is_official: boolean;
+  weekly_installs: number[];
+  installs_yesterday?: number | null;
+  change?: number | null;
+}
+
+export interface SkillCatalogPage {
+  tab: CatalogTab;
+  page: number;
+  total: number;
+  has_more: boolean;
+  skills: RemoteSkillSummary[];
+}
+
+export interface SkillPreview {
+  source: string;
+  skill_id: string;
+  name: string;
+  description: string;
+  content: string;
+  license?: string | null;
+  compatibility?: string | null;
+  files: string[];
+}
+
+export interface SkillInstallRequest {
+  source: string;
+  skill_id?: string | null;
+  scope: "global" | "workspace";
+  workspace_path?: string | null;
+}
+
 export interface DirectoryEntry {
   name: string;
   path: string;

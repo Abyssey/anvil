@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../../App";
 import { defaultThemeSlug, themes } from "../../astryx-themes";
+import { SETTINGS_STORAGE_KEY } from "../../state/settings";
 import { AppErrorBoundary } from "../workspace/AppErrorBoundary";
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -335,5 +336,187 @@ describe("App + LiveWorkspaceProvider end-to-end integration", () => {
     await screen.findByText("Oldest message 1");
     expect(pageUrls.some((u) => u.includes("before_id=m-21"))).toBe(true);
     expect(scroller?.scrollTop).toBe(650);
+  });
+
+  it("aborts Project A in-flight SSE stream on switch to Project B and prevents cross-project token leaks", async () => {
+    window.localStorage.setItem(
+      SETTINGS_STORAGE_KEY,
+      JSON.stringify({
+        baseUrl: "http://127.0.0.1:8099/v1",
+        model: "qwen3.8-flash",
+        apiKey: "sk-live-test-key",
+        enableThinking: true,
+      }),
+    );
+
+    const projectA = {
+      id: "proj-a",
+      name: "alpha-repo",
+      path: "/work/alpha",
+      is_git_repo: true,
+      branch: "main",
+      created_at: "2026-11-22T00:00:00Z",
+      updated_at: "2026-11-22T00:00:00Z",
+    };
+    const projectB = {
+      id: "proj-b",
+      name: "beta-repo",
+      path: "/work/beta",
+      is_git_repo: true,
+      branch: "dev",
+      created_at: "2026-11-22T00:00:00Z",
+      updated_at: "2026-11-22T00:00:00Z",
+    };
+    const sessionA = {
+      id: "sess-a",
+      project_id: "proj-a",
+      title: "Alpha Session",
+      workspace_path: "/work/alpha",
+      mode: "ask" as const,
+      status: "idle" as const,
+      pending_interrupt: null,
+      created_at: "2026-11-22T00:00:00Z",
+      updated_at: "2026-11-22T00:00:00Z",
+    };
+    const sessionB = {
+      id: "sess-b",
+      project_id: "proj-b",
+      title: "Beta Session",
+      workspace_path: "/work/beta",
+      mode: "ask" as const,
+      status: "idle" as const,
+      pending_interrupt: null,
+      created_at: "2026-11-22T00:00:00Z",
+      updated_at: "2026-11-22T00:00:00Z",
+    };
+
+    const enc = new TextEncoder();
+    let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
+    let streamAbortSignal: AbortSignal | undefined;
+    let capturedStreamBody: Record<string, unknown> | null = null;
+    let skillsLoaded = false;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/projects") return jsonResponse([projectA, projectB]);
+        if (url === "/api/sessions") return jsonResponse([sessionA, sessionB]);
+        if (url.startsWith("/api/skills/installed")) {
+          skillsLoaded = true;
+          return jsonResponse([
+            {
+              name: "sec-audit",
+              description: "Security audit skill",
+              scope: "global",
+              source_label: "Global",
+              path: "/global/sec-audit",
+              deletable: true,
+            },
+          ]);
+        }
+        if (url.startsWith("/api/workspace/tree")) return jsonResponse([]);
+        if (url.startsWith("/api/workspace/validate")) {
+          const isBeta = url.includes("beta");
+          return jsonResponse(
+            isBeta
+              ? { path: "/work/beta", name: "beta-repo", is_git_repo: true, branch: "dev" }
+              : { path: "/work/alpha", name: "alpha-repo", is_git_repo: true, branch: "main" },
+          );
+        }
+        if (url.startsWith("/api/workspace/diff")) {
+          return jsonResponse({ workspace_path: "/work/alpha", branch: "main", git_head: "abc", files: [] });
+        }
+        if (url.startsWith("/api/sessions/sess-a/artifacts")) {
+          return jsonResponse({ artifacts: [], walkthrough_plan: null });
+        }
+        if (url.startsWith("/api/sessions/sess-b/artifacts")) {
+          return jsonResponse({ artifacts: [], walkthrough_plan: null });
+        }
+        if (url === "/api/sessions/sess-a" || url.startsWith("/api/sessions/sess-a?")) {
+          return jsonResponse({ session: sessionA, messages: [], has_more_messages: false });
+        }
+        if (url === "/api/sessions/sess-b" || url.startsWith("/api/sessions/sess-b?")) {
+          return jsonResponse({
+            session: sessionB,
+            messages: [
+              {
+                id: "b-msg-1",
+                session_id: "sess-b",
+                role: "assistant",
+                content: "Beta clean state ready.",
+                thinking: "",
+                tool_calls: [],
+                created_at: "2026-11-22T00:00:10Z",
+              },
+            ],
+            has_more_messages: false,
+          });
+        }
+        if (url === "/api/sessions/sess-a/messages/stream") {
+          streamAbortSignal = init?.signal ?? undefined;
+          capturedStreamBody = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+          const stream = new ReadableStream<Uint8Array>({
+            start(ctrl) {
+              streamController = ctrl;
+              ctrl.enqueue(enc.encode('event: token\ndata: {"text":"ALPHASTREAMTOKEN"}\n\n'));
+            },
+          });
+          return new Response(stream, { status: 200 });
+        }
+        return jsonResponse({});
+      }),
+    );
+
+    render(
+      <Theme theme={themes[defaultThemeSlug]}>
+        <App />
+      </Theme>,
+    );
+
+    // Wait for initial Alpha session detail & installed skills to finish loading
+    await waitFor(() => {
+      expect(screen.getAllByText("Alpha Session").length).toBeGreaterThanOrEqual(2);
+      expect(skillsLoaded).toBe(true);
+      expect(screen.getByRole("textbox", { name: "Message input" })).toBeInTheDocument();
+    });
+
+    // Send a message invoking /sec-audit on Alpha
+    const textbox = screen.getByRole("textbox", { name: "Message input" });
+    textbox.textContent = "/sec-audit Inspect alpha auth";
+    fireEvent.input(textbox);
+    fireEvent.keyDown(textbox, { key: "Enter", code: "Enter" });
+
+    // Confirm Project A stream started and forwarded pinned_skills
+    await waitFor(() => {
+      expect(capturedStreamBody).toEqual({
+        content: "Inspect alpha auth",
+        mode: "ask",
+        pinned_skills: ["sec-audit"],
+      });
+      expect(document.body.textContent).toContain("ALPHASTREAMTOKEN");
+    });
+    expect(streamAbortSignal?.aborted).toBe(false);
+
+    // Switch to Project B's session while Project A is still streaming
+    fireEvent.click(screen.getByText("Beta Session"));
+
+    // AbortSignal for Project A MUST be aborted immediately
+    await waitFor(() => {
+      expect(streamAbortSignal?.aborted).toBe(true);
+    });
+
+    // Even if Project A's stream pushes late tokens & closes after switching, Project B MUST stay clean
+    await act(async () => {
+      streamController?.enqueue(
+        enc.encode('event: token\ndata: {"text":"ALPHALEAKEDSECRET"}\n\n'),
+      );
+      streamController?.close();
+      await Promise.resolve();
+    });
+
+    await screen.findByText("Beta clean state ready.");
+    expect(document.body.textContent).not.toContain("ALPHASTREAMTOKEN");
+    expect(document.body.textContent).not.toContain("ALPHALEAKEDSECRET");
   });
 });

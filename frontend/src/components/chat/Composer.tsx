@@ -1,6 +1,8 @@
 import { useState } from "react";
-import { ChatComposer } from "@astryxdesign/core/Chat";
+import { ChatComposer, ChatComposerDrawer } from "@astryxdesign/core/Chat";
 import { SegmentedControl, SegmentedControlItem } from "@astryxdesign/core/SegmentedControl";
+import { HStack } from "@astryxdesign/core/Stack";
+import { Token } from "@astryxdesign/core/Token";
 import type { RunMode } from "../../api/types";
 import { useWorkspace } from "../../state/workspaceContext";
 
@@ -33,6 +35,23 @@ export function Composer() {
       isDisabled={hasPendingInterrupt || state.isStreaming}
       placeholder={PLACEHOLDER_BY_MODE[state.mode]}
       status={state.streamError ? { type: "error", message: state.streamError } : undefined}
+      drawer={
+        state.pinnedSkills.length > 0 ? (
+          <ChatComposerDrawer>
+            <HStack gap={1.5} vAlign="center" wrap="wrap">
+              {state.pinnedSkills.map((skillName) => (
+                <Token
+                  key={skillName}
+                  label={`/${skillName}`}
+                  size="sm"
+                  color="purple"
+                  onRemove={() => actions.unpinSkill(skillName)}
+                />
+              ))}
+            </HStack>
+          </ChatComposerDrawer>
+        ) : undefined
+      }
       footerActions={
         <SegmentedControl
           label="Execution mode"

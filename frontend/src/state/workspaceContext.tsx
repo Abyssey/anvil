@@ -13,6 +13,7 @@ import type {
   ArtifactDoc,
   ArtifactKind,
   ChatMessage,
+  InstalledSkill,
   PendingInterrupt,
   Project,
   RunMode,
@@ -42,6 +43,10 @@ export interface WorkspaceState {
   settings: LLMSettings;
   settingsOpen: boolean;
   addProjectOpen: boolean;
+  skillsOpen: boolean;
+  memoryOpen: boolean;
+  installedSkills: InstalledSkill[];
+  pinnedSkills: string[];
   projects: Project[];
   activeProjectId: string | null;
   sessions: Session[];
@@ -69,6 +74,14 @@ export interface WorkspaceActions {
   closeSettings: () => void;
   openAddProject: () => void;
   closeAddProject: () => void;
+  openSkills: () => void;
+  closeSkills: () => void;
+  openMemory: () => void;
+  closeMemory: () => void;
+  refreshInstalledSkills: () => Promise<void>;
+  pinSkill: (name: string) => void;
+  unpinSkill: (name: string) => void;
+  clearPinnedSkills: () => void;
   updateSettings: (next: LLMSettings) => void;
   clearSettings: () => void;
   addProject: (path: string) => Promise<void>;
@@ -120,12 +133,43 @@ function upsertArtifactDoc(bundle: ArtifactBundle, doc: ArtifactDoc): ArtifactBu
   return { ...bundle, artifacts: [...remaining, doc] };
 }
 
+function sessionsMatchingProject(
+  list: Session[],
+  project: Pick<Project, "id" | "path">,
+): Session[] {
+  return list.filter(
+    (s) => s.project_id === project.id || (!s.project_id && s.workspace_path === project.path),
+  );
+}
+
 function projectForSession(projects: Project[], session: Session): Project | undefined {
   if (session.project_id) {
-    const byId = projects.find((p) => p.id === session.project_id);
-    if (byId) return byId;
+    return projects.find((p) => p.id === session.project_id);
   }
   return projects.find((p) => p.path === session.workspace_path);
+}
+
+function parseLeadingSkillMentions(
+  input: string,
+  installed: InstalledSkill[],
+): { cleanedContent: string; mentionedSkills: string[] } {
+  const installedNames = new Set(installed.map((s) => s.name));
+  const mentionedSkills: string[] = [];
+  let remaining = input.trim();
+  while (remaining.startsWith("/")) {
+    const match = /^\/([a-z0-9][a-z0-9-]{0,63})(?:\s+(.*))?$/s.exec(remaining);
+    if (!match) break;
+    const candidate = match[1];
+    if (!installedNames.has(candidate)) break;
+    if (!mentionedSkills.includes(candidate)) {
+      mentionedSkills.push(candidate);
+    }
+    remaining = (match[2] ?? "").trim();
+  }
+  return {
+    cleanedContent: remaining || input.trim(),
+    mentionedSkills,
+  };
 }
 
 export function WorkspaceProvider({
@@ -146,6 +190,10 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<LLMSettings>(() => loadLLMSettings());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [addProjectOpen, setAddProjectOpen] = useState(false);
+  const [skillsOpen, setSkillsOpen] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
+  const [installedSkills, setInstalledSkills] = useState<InstalledSkill[]>([]);
+  const [pinnedSkills, setPinnedSkills] = useState<string[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -171,22 +219,69 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
 
   const abortRef = useRef<AbortController | null>(null);
   const loadingOlderRef = useRef(false);
+  const loadSeqRef = useRef(0);
+  const skillsSeqRef = useRef(0);
   const activeSessionRef = useRef<Session | null>(null);
   const messagesRef = useRef<ChatMessage[]>([]);
   const hasMoreMessagesRef = useRef(false);
+  const workspacePathRef = useRef(workspacePath);
+  const installedSkillsRef = useRef<InstalledSkill[]>([]);
+  const pinnedSkillsRef = useRef<string[]>([]);
 
   activeSessionRef.current = activeSession;
   messagesRef.current = messages;
   hasMoreMessagesRef.current = hasMoreMessages;
+  workspacePathRef.current = workspacePath;
+  installedSkillsRef.current = installedSkills;
+  pinnedSkillsRef.current = pinnedSkills;
+
+  const resetActiveSessionView = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    loadSeqRef.current += 1;
+    loadingOlderRef.current = false;
+    activeSessionRef.current = null;
+    setActiveSession(null);
+    setMessages([]);
+    setStreamingAssistant(null);
+    setIsStreaming(false);
+    setArtifacts(EMPTY_ARTIFACTS);
+    setDiff(null);
+    setDiffFocus(null);
+    setStreamError(null);
+    setHasMoreMessages(false);
+    setIsLoadingOlderMessages(false);
+    setPinnedSkills([]);
+  }, []);
+
+  const refreshInstalledSkills = useCallback(async () => {
+    const seq = ++skillsSeqRef.current;
+    const currentPath = workspacePathRef.current;
+    try {
+      const list = await apiClient.listInstalledSkills(currentPath || undefined);
+      if (seq !== skillsSeqRef.current) return;
+      setInstalledSkills(Array.isArray(list) ? list : []);
+    } catch {
+      if (seq !== skillsSeqRef.current) return;
+      setInstalledSkills([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshInstalledSkills();
+  }, [workspacePath, refreshInstalledSkills]);
 
   const loadSessionDetail = useCallback(
     async (sessionId: string, knownProjects?: Project[]) => {
+      const loadSeq = ++loadSeqRef.current;
       loadingOlderRef.current = false;
       setIsLoadingOlderMessages(false);
       const [detail, artBundle] = await Promise.all([
         apiClient.getSession(sessionId, 20),
         apiClient.listArtifacts(sessionId),
       ]);
+      if (loadSeq !== loadSeqRef.current) return;
+      activeSessionRef.current = detail.session;
       setActiveSession(detail.session);
       setMessages(detail.messages);
       setHasMoreMessages(Boolean(detail.has_more_messages));
@@ -206,9 +301,11 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
           apiClient.validateWorkspace(detail.session.workspace_path),
           apiClient.getWorkspaceDiff(detail.session.workspace_path),
         ]);
+        if (loadSeq !== loadSeqRef.current) return;
         setWorkspaceInfo(info);
         setDiff(diffData);
       } catch (err) {
+        if (loadSeq !== loadSeqRef.current) return;
         setWorkspaceInfo(null);
         setWorkspaceError(err instanceof Error ? err.message : "Invalid workspace");
       }
@@ -276,6 +373,24 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
   const openAddProject = useCallback(() => setAddProjectOpen(true), []);
   const closeAddProject = useCallback(() => setAddProjectOpen(false), []);
+  const openSkills = useCallback(() => setSkillsOpen(true), []);
+  const closeSkills = useCallback(() => setSkillsOpen(false), []);
+  const openMemory = useCallback(() => setMemoryOpen(true), []);
+  const closeMemory = useCallback(() => setMemoryOpen(false), []);
+
+  const pinSkill = useCallback((name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    setPinnedSkills((prev) => (prev.includes(trimmed) ? prev : [...prev, trimmed]));
+  }, []);
+
+  const unpinSkill = useCallback((name: string) => {
+    setPinnedSkills((prev) => prev.filter((item) => item !== name));
+  }, []);
+
+  const clearPinnedSkills = useCallback(() => {
+    setPinnedSkills([]);
+  }, []);
 
   const updateSettings = useCallback((next: LLMSettings) => {
     const saved = saveLLMSettings(next);
@@ -289,6 +404,7 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
 
   const createNewSession = useCallback(
     async (projectId?: string) => {
+      resetActiveSessionView();
       const targetProj =
         (projectId ? projects.find((p) => p.id === projectId) : undefined) ??
         projects.find((p) => p.id === activeProjectId) ??
@@ -300,29 +416,34 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
       );
       if (targetProj) {
         setActiveProjectId(targetProj.id);
+        setWorkspacePathState(targetProj.path);
       }
       setSessions((prev) => [created, ...prev]);
-      setDiffFocus(null);
-      setStreamError(null);
       await loadSessionDetail(created.id);
     },
-    [projects, activeProjectId, workspacePath, mode, loadSessionDetail],
+    [resetActiveSessionView, projects, activeProjectId, workspacePath, mode, loadSessionDetail],
   );
 
   const selectProject = useCallback(
     async (projectId: string) => {
       const targetProj = projects.find((p) => p.id === projectId);
       if (!targetProj) return;
+      if (
+        targetProj.id === activeProjectId &&
+        activeSessionRef.current &&
+        (activeSessionRef.current.project_id === targetProj.id ||
+          (!activeSessionRef.current.project_id &&
+            activeSessionRef.current.workspace_path === targetProj.path))
+      ) {
+        return;
+      }
+      resetActiveSessionView();
       setActiveProjectId(targetProj.id);
       setWorkspacePathState(targetProj.path);
-      setStreamError(null);
-      setDiffFocus(null);
       setRightDrawerTab("files");
       setTreeRevision((n) => n + 1);
 
-      const projSessions = sessions.filter(
-        (s) => s.project_id === targetProj.id || s.workspace_path === targetProj.path,
-      );
+      const projSessions = sessionsMatchingProject(sessions, targetProj);
       if (projSessions.length > 0) {
         await loadSessionDetail(projSessions[0].id);
       } else {
@@ -331,12 +452,13 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
         await loadSessionDetail(created.id);
       }
     },
-    [projects, sessions, mode, loadSessionDetail],
+    [projects, activeProjectId, resetActiveSessionView, sessions, mode, loadSessionDetail],
   );
 
   const addProject = useCallback(
     async (path: string) => {
       setWorkspaceError(null);
+      resetActiveSessionView();
       const createdProj = await apiClient.createProject(path);
       const nextProjects = [
         createdProj,
@@ -348,9 +470,7 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
       setRightDrawerTab("files");
       setTreeRevision((n) => n + 1);
 
-      const existingSessions = sessions.filter(
-        (s) => s.project_id === createdProj.id || s.workspace_path === createdProj.path,
-      );
+      const existingSessions = sessionsMatchingProject(sessions, createdProj);
       if (existingSessions.length > 0) {
         await loadSessionDetail(existingSessions[0].id, nextProjects);
       } else {
@@ -363,24 +483,37 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
         await loadSessionDetail(createdSess.id, nextProjects);
       }
     },
-    [projects, sessions, mode, loadSessionDetail],
+    [resetActiveSessionView, projects, sessions, mode, loadSessionDetail],
   );
 
   const removeProject = useCallback(
     async (projectId: string) => {
+      const targetProj = projects.find((p) => p.id === projectId);
+      const isRemovingActive =
+        activeProjectId === projectId ||
+        activeSession?.project_id === projectId ||
+        (Boolean(targetProj) &&
+          !activeSession?.project_id &&
+          activeSession?.workspace_path === targetProj?.path);
+      if (isRemovingActive) {
+        resetActiveSessionView();
+      }
       await apiClient.deleteProject(projectId);
       const remainingProjects = projects.filter((p) => p.id !== projectId);
-      const remainingSessions = sessions.filter((s) => s.project_id !== projectId);
+      const remainingSessions = sessions.filter(
+        (s) =>
+          s.project_id !== projectId &&
+          !(targetProj && !s.project_id && s.workspace_path === targetProj.path),
+      );
       setProjects(remainingProjects);
       setSessions(remainingSessions);
 
-      if (activeProjectId === projectId || activeSession?.project_id === projectId) {
+      if (isRemovingActive) {
         if (remainingProjects.length > 0) {
           const nextProj = remainingProjects[0];
           setActiveProjectId(nextProj.id);
-          const nextProjSessions = remainingSessions.filter(
-            (s) => s.project_id === nextProj.id || s.workspace_path === nextProj.path,
-          );
+          setWorkspacePathState(nextProj.path);
+          const nextProjSessions = sessionsMatchingProject(remainingSessions, nextProj);
           if (nextProjSessions.length > 0) {
             await loadSessionDetail(nextProjSessions[0].id, remainingProjects);
           } else {
@@ -394,6 +527,7 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
           const fallbackProj = refreshed[0];
           if (fallbackProj) {
             setActiveProjectId(fallbackProj.id);
+            setWorkspacePathState(fallbackProj.path);
             const created = await apiClient.createSession(
               fallbackProj.path,
               mode,
@@ -405,43 +539,68 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
         }
       }
     },
-    [projects, sessions, activeProjectId, activeSession, mode, loadSessionDetail],
+    [
+      projects,
+      sessions,
+      activeProjectId,
+      activeSession,
+      resetActiveSessionView,
+      mode,
+      loadSessionDetail,
+    ],
   );
 
   const selectSession = useCallback(
     async (sessionId: string) => {
-      setStreamError(null);
+      if (activeSessionRef.current?.id === sessionId) {
+        setStreamError(null);
+        return;
+      }
+      resetActiveSessionView();
       await loadSessionDetail(sessionId);
     },
-    [loadSessionDetail],
+    [resetActiveSessionView, loadSessionDetail],
   );
 
   const removeSession = useCallback(
     async (sessionId: string) => {
+      const isRemovingActive = activeSession?.id === sessionId;
+      if (isRemovingActive) {
+        resetActiveSessionView();
+      }
       await apiClient.deleteSession(sessionId);
       const remaining = sessions.filter((s) => s.id !== sessionId);
       setSessions(remaining);
-      if (activeSession?.id === sessionId) {
-        const sameProjectSessions = remaining.filter(
-          (s) => s.project_id === activeProjectId || s.workspace_path === workspacePath,
-        );
+      if (isRemovingActive) {
+        const currentProj = projects.find((p) => p.id === activeProjectId) ?? projects[0];
+        const sameProjectSessions = currentProj
+          ? sessionsMatchingProject(remaining, currentProj)
+          : [];
         if (sameProjectSessions.length > 0) {
           await loadSessionDetail(sameProjectSessions[0].id);
         } else if (remaining.length > 0) {
           await loadSessionDetail(remaining[0].id);
         } else {
-          const targetProj = projects.find((p) => p.id === activeProjectId) ?? projects[0];
           const created = await apiClient.createSession(
-            targetProj?.path ?? (workspacePath || undefined),
+            currentProj?.path ?? (workspacePath || undefined),
             mode,
-            targetProj?.id,
+            currentProj?.id,
           );
           setSessions([created]);
           await loadSessionDetail(created.id);
         }
       }
     },
-    [sessions, activeSession, activeProjectId, projects, workspacePath, mode, loadSessionDetail],
+    [
+      sessions,
+      activeSession,
+      resetActiveSessionView,
+      activeProjectId,
+      projects,
+      workspacePath,
+      mode,
+      loadSessionDetail,
+    ],
   );
 
   const setWorkspacePath = useCallback(
@@ -461,7 +620,9 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
       setModeState(nextMode);
       if (activeSession) {
         const updated = await apiClient.updateSession(activeSession.id, { mode: nextMode });
-        setActiveSession(updated);
+        if (activeSessionRef.current?.id === updated.id) {
+          setActiveSession(updated);
+        }
         setSessions((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
       }
     },
@@ -478,6 +639,7 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
 
       try {
         await apiClient.streamSSE(url, body, settings, controller.signal, (ev: StreamEvent) => {
+          if (activeSessionRef.current?.id !== targetSessionId) return;
           if (ev.event === "thinking") {
             const delta = String(ev.data.text ?? "");
             setStreamingAssistant((prev) =>
@@ -525,7 +687,9 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
           } else if (ev.event === "interrupt") {
             const pending = ev.data as unknown as PendingInterrupt;
             setActiveSession((prev) =>
-              prev ? { ...prev, status: "awaiting_approval", pending_interrupt: pending } : prev,
+              prev && prev.id === targetSessionId
+                ? { ...prev, status: "awaiting_approval", pending_interrupt: pending }
+                : prev,
             );
             if (pending.kind === "plan_review") {
               setActiveArtifactTab("implementation_plan");
@@ -538,27 +702,40 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
           }
         });
       } catch (err) {
+        if (activeSessionRef.current?.id !== targetSessionId) return;
         if (err instanceof ApiError && err.code === "LLM_SETTINGS_REQUIRED") {
           setSettingsOpen(true);
           setStreamError(err.message);
         } else if (err instanceof DOMException && err.name === "AbortError") {
-          // User stopped stream manually
+          // User stopped stream manually or switched session/project
         } else {
           setStreamError(err instanceof Error ? err.message : "Streaming error");
         }
       } finally {
-        abortRef.current = null;
+        if (abortRef.current === controller) {
+          abortRef.current = null;
+        }
+        if (activeSessionRef.current?.id !== targetSessionId) {
+          void apiClient.listSessions().then(setSessions).catch(() => undefined);
+          return;
+        }
         setIsStreaming(false);
         setStreamingAssistant(null);
         setTreeRevision((n) => n + 1);
         const [refreshedList, detail, artBundle, diffData] = await Promise.all([
-          apiClient.listSessions().catch(() => sessions),
+          apiClient.listSessions().catch(() => null),
           apiClient.getSession(targetSessionId, 20).catch(() => null),
           apiClient.listArtifacts(targetSessionId).catch(() => null),
           wsPath ? apiClient.getWorkspaceDiff(wsPath).catch(() => null) : Promise.resolve(null),
         ]);
-        setSessions(refreshedList);
+        if (refreshedList) {
+          setSessions(refreshedList);
+        }
+        if (activeSessionRef.current?.id !== targetSessionId) {
+          return;
+        }
         if (detail) {
+          activeSessionRef.current = detail.session;
           setActiveSession(detail.session);
           let keptOlderPrefix = false;
           setMessages((prev) => {
@@ -584,7 +761,7 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
         }
       }
     },
-    [settings, sessions],
+    [settings],
   );
 
   const sendMessage = useCallback(
@@ -604,8 +781,20 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
           mode,
           targetProj?.id,
         );
+        activeSessionRef.current = targetSession;
         setActiveSession(targetSession);
         setSessions((prev) => [targetSession as Session, ...prev]);
+      }
+
+      const { cleanedContent, mentionedSkills } = parseLeadingSkillMentions(
+        trimmed,
+        installedSkillsRef.current,
+      );
+      const effectivePinnedSkills = Array.from(
+        new Set([...pinnedSkillsRef.current, ...mentionedSkills]),
+      );
+      if (pinnedSkillsRef.current.length > 0) {
+        setPinnedSkills([]);
       }
 
       const optimisticUser: ChatMessage = {
@@ -620,7 +809,11 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
       setMessages((prev) => [...prev, optimisticUser]);
       await runSSEStream(
         `/api/sessions/${encodeURIComponent(targetSession.id)}/messages/stream`,
-        { content: trimmed, mode },
+        {
+          content: cleanedContent,
+          mode,
+          pinned_skills: effectivePinnedSkills,
+        },
         targetSession.id,
         targetSession.workspace_path,
       );
@@ -688,10 +881,13 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
   );
 
   const refreshDiff = useCallback(async () => {
-    if (!workspacePath) return;
-    const diffData = await apiClient.getWorkspaceDiff(workspacePath);
-    setDiff(diffData);
-  }, [workspacePath]);
+    const targetPath = workspacePathRef.current;
+    if (!targetPath) return;
+    const diffData = await apiClient.getWorkspaceDiff(targetPath);
+    if (workspacePathRef.current === targetPath) {
+      setDiff(diffData);
+    }
+  }, []);
 
   const jumpToDiffHunk = useCallback(
     async (path: string, hunkName?: string) => {
@@ -725,6 +921,10 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
       settings,
       settingsOpen,
       addProjectOpen,
+      skillsOpen,
+      memoryOpen,
+      installedSkills,
+      pinnedSkills,
       projects,
       activeProjectId,
       sessions,
@@ -751,6 +951,14 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
       closeSettings,
       openAddProject,
       closeAddProject,
+      openSkills,
+      closeSkills,
+      openMemory,
+      closeMemory,
+      refreshInstalledSkills,
+      pinSkill,
+      unpinSkill,
+      clearPinnedSkills,
       updateSettings,
       clearSettings,
       addProject,

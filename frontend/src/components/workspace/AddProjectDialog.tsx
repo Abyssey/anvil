@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
@@ -13,6 +13,20 @@ import { ArrowUpIcon, FolderIcon } from "@heroicons/react/24/outline";
 import { apiClient } from "../../api/client";
 import type { DirectoryBrowseResponse } from "../../api/types";
 import { useWorkspace } from "../../state/workspaceContext";
+
+function normalizeFolderPath(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed === "/") return "/";
+  return trimmed.replace(/\/+$/, "");
+}
+
+function getParentDirectoryPath(raw: string): string | undefined {
+  const normalized = normalizeFolderPath(raw);
+  if (!normalized || normalized === "/") return undefined;
+  const lastSlash = normalized.lastIndexOf("/");
+  if (lastSlash <= 0) return undefined;
+  return normalized.slice(0, lastSlash);
+}
 
 export function AddProjectDialog() {
   const { state, actions } = useWorkspace();
@@ -38,9 +52,21 @@ export function AddProjectDialog() {
 
   useEffect(() => {
     if (state.addProjectOpen) {
-      void loadDirectory(state.workspacePath || undefined);
+      const parentPath = getParentDirectoryPath(state.workspacePath);
+      void loadDirectory(parentPath);
     }
   }, [state.addProjectOpen, state.workspacePath, loadDirectory]);
+
+  const registeredPaths = useMemo(
+    () => new Set(state.projects.map((p) => normalizeFolderPath(p.path))),
+    [state.projects],
+  );
+
+  const effectiveTarget = normalizeFolderPath(pathInput || browseData?.current_path || "");
+  const existingProject = useMemo(
+    () => state.projects.find((p) => normalizeFolderPath(p.path) === effectiveTarget) ?? null,
+    [state.projects, effectiveTarget],
+  );
 
   const handleOpenPath = () => {
     const trimmed = pathInput.trim();
@@ -54,7 +80,11 @@ export function AddProjectDialog() {
     setIsSubmitting(true);
     setError(null);
     try {
-      await actions.addProject(target);
+      if (existingProject) {
+        await actions.selectProject(existingProject.id);
+      } else {
+        await actions.addProject(target);
+      }
       actions.closeAddProject();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to add project");
@@ -123,9 +153,12 @@ export function AddProjectDialog() {
                       {browseData.current_path}
                     </Text>
                   </HStack>
-                  {browseData.is_git_repo && (
-                    <Badge label={`git: ${browseData.branch || "repo"}`} variant="info" />
-                  )}
+                  <HStack gap={1} vAlign="center">
+                    {existingProject && <Badge label="Already added" variant="warning" />}
+                    {browseData.is_git_repo && (
+                      <Badge label={`git: ${browseData.branch || "repo"}`} variant="info" />
+                    )}
+                  </HStack>
                 </HStack>
               )}
 
@@ -134,17 +167,25 @@ export function AddProjectDialog() {
               <VStack height={240} isScrollable>
                 {browseData && browseData.directories.length > 0 ? (
                   <List density="compact" hasDividers={false}>
-                    {browseData.directories.map((dir) => (
-                      <ListItem
-                        key={dir.path}
-                        label={dir.name}
-                        startContent={<Icon icon={FolderIcon} size="sm" color="accent" />}
-                        endContent={
-                          dir.is_git_repo ? <Badge label="git" variant="neutral" /> : undefined
-                        }
-                        onClick={() => void loadDirectory(dir.path)}
-                      />
-                    ))}
+                    {browseData.directories.map((dir) => {
+                      const isAdded = registeredPaths.has(normalizeFolderPath(dir.path));
+                      return (
+                        <ListItem
+                          key={dir.path}
+                          label={dir.name}
+                          startContent={<Icon icon={FolderIcon} size="sm" color="accent" />}
+                          endContent={
+                            isAdded || dir.is_git_repo ? (
+                              <HStack gap={1} vAlign="center">
+                                {isAdded && <Badge label="Added" variant="neutral" />}
+                                {dir.is_git_repo && <Badge label="git" variant="neutral" />}
+                              </HStack>
+                            ) : undefined
+                          }
+                          onClick={() => void loadDirectory(dir.path)}
+                        />
+                      );
+                    })}
                   </List>
                 ) : (
                   <Text type="supporting" color="secondary">
@@ -160,7 +201,7 @@ export function AddProjectDialog() {
             <HStack hAlign="end" gap={2} width="100%">
               <Button label="Cancel" variant="secondary" onClick={actions.closeAddProject} />
               <Button
-                label="Add Folder"
+                label={existingProject ? "Open Existing Project" : "Add Project"}
                 variant="primary"
                 isLoading={isSubmitting}
                 isDisabled={!pathInput.trim()}

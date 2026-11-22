@@ -1,13 +1,22 @@
 import type {
   ArtifactBundle,
   ArtifactKind,
+  CatalogTab,
   DirectoryBrowseResponse,
   FilePreview,
+  InstalledSkill,
+  InstalledSkillDetail,
   MessagePageResponse,
   Project,
+  ProjectMemory,
+  RemoteSkillSummary,
   RunMode,
   Session,
   SessionDetail,
+  SkillCatalogPage,
+  SkillInstallRequest,
+  SkillPreview,
+  SkillScope,
   StreamEvent,
   TreeNode,
   WorkspaceDiff,
@@ -90,6 +99,88 @@ export const apiClient = {
     return fetchJson(`/api/projects/${encodeURIComponent(projectId)}`, {
       method: "DELETE",
     });
+  },
+
+  getProjectMemory(projectId: string): Promise<ProjectMemory> {
+    return fetchJson(`/api/projects/${encodeURIComponent(projectId)}/memory`);
+  },
+
+  updateProjectMemory(projectId: string, content: string): Promise<ProjectMemory> {
+    return fetchJson(`/api/projects/${encodeURIComponent(projectId)}/memory`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content }),
+    });
+  },
+
+  clearProjectMemory(projectId: string): Promise<void> {
+    return fetchJson(`/api/projects/${encodeURIComponent(projectId)}/memory`, {
+      method: "DELETE",
+    });
+  },
+
+  listInstalledSkills(workspacePath?: string): Promise<InstalledSkill[]> {
+    const qs = workspacePath ? `?workspace_path=${encodeURIComponent(workspacePath)}` : "";
+    return fetchJson(`/api/skills/installed${qs}`);
+  },
+
+  getInstalledSkillDetail(
+    scope: SkillScope,
+    name: string,
+    workspacePath?: string,
+  ): Promise<InstalledSkillDetail> {
+    const qs = workspacePath ? `?workspace_path=${encodeURIComponent(workspacePath)}` : "";
+    return fetchJson(
+      `/api/skills/installed/${encodeURIComponent(scope)}/${encodeURIComponent(name)}${qs}`,
+    );
+  },
+
+  browseSkillsCatalog(
+    tab: CatalogTab = "all-time",
+    page = 0,
+    workspacePath?: string,
+  ): Promise<SkillCatalogPage> {
+    const qs = new URLSearchParams({ tab, page: String(page) });
+    if (workspacePath) {
+      qs.set("workspace_path", workspacePath);
+    }
+    return fetchJson(`/api/skills/catalog?${qs.toString()}`);
+  },
+
+  searchSkillsCatalog(
+    q: string,
+    limit = 20,
+    workspacePath?: string,
+  ): Promise<RemoteSkillSummary[]> {
+    const qs = new URLSearchParams({ q, limit: String(limit) });
+    if (workspacePath) {
+      qs.set("workspace_path", workspacePath);
+    }
+    return fetchJson(`/api/skills/search?${qs.toString()}`);
+  },
+
+  previewRemoteSkill(source: string, skillId?: string): Promise<SkillPreview> {
+    const qs = new URLSearchParams({ source });
+    if (skillId) {
+      qs.set("skill_id", skillId);
+    }
+    return fetchJson(`/api/skills/preview?${qs.toString()}`);
+  },
+
+  installSkill(req: SkillInstallRequest): Promise<InstalledSkill> {
+    return fetchJson("/api/skills/install", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+    });
+  },
+
+  deleteSkill(scope: SkillScope, name: string, workspacePath?: string): Promise<void> {
+    const qs = workspacePath ? `?workspace_path=${encodeURIComponent(workspacePath)}` : "";
+    return fetchJson(
+      `/api/skills/${encodeURIComponent(scope)}/${encodeURIComponent(name)}${qs}`,
+      { method: "DELETE" },
+    );
   },
 
   getWorkspaceTree(path: string, relPath = "", maxDepth = 3): Promise<TreeNode[]> {
