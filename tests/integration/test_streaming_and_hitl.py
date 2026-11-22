@@ -157,15 +157,15 @@ def test_ask_mode_onboarding_stream_and_save_to_workspace(tmp_path: Path) -> Non
         assert "artifact_updated" in event_names
         assert "done" in event_names
 
-        # Check SubdirAgentsReadMiddleware injected root AGENTS.md during read_file
-        tool_messages = [
+        # Check DynamicMemoryMiddleware injected root AGENTS.md into the system prompt on turn 1
+        system_messages = [
             msg
             for call in model.recorded_calls
             for msg in call
-            if getattr(msg, "name", "") == "read_file"
+            if getattr(msg, "type", "") == "system"
         ]
         assert any(
-            "Repo convention: keep modules focused." in str(m.content) for m in tool_messages
+            "Repo convention: keep modules focused." in str(m.content) for m in system_messages
         )
 
         artifacts = client.get(f"/api/sessions/{sid}/artifacts").json()["artifacts"]

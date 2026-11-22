@@ -49,6 +49,16 @@ class AppConfig:
             frontend_dist_dir=root / "frontend" / "dist",
         )
 
+    @property
+    def skills_root(self) -> Path:
+        return self.data_dir / "skills"
+
+    @property
+    def memories_root(self) -> Path:
+        return self.data_dir / "memories"
+
     def ensure_directories(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.artifacts_root.mkdir(parents=True, exist_ok=True)
+        self.skills_root.mkdir(parents=True, exist_ok=True)
+        self.memories_root.mkdir(parents=True, exist_ok=True)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 from collections import OrderedDict
 from collections.abc import AsyncIterator, Mapping
@@ -24,6 +25,10 @@ from backend.app.domains.agent.middleware.git_evidence import (
     GitEvidenceMiddleware,
     GitEvidenceTracker,
 )
+from backend.app.domains.agent.middleware.memory import (
+    PROJECT_MEMORY_SOURCES,
+    DynamicMemoryMiddleware,
+)
 from backend.app.domains.agent.middleware.model_retries import ModelRetryMiddleware
 from backend.app.domains.agent.middleware.run_prompt import RunPromptMiddleware
 from backend.app.domains.agent.middleware.subdir_agents import SubdirAgentsReadMiddleware
@@ -31,6 +36,7 @@ from backend.app.domains.agent.middleware.tool_errors import ToolErrorMiddleware
 from backend.app.domains.agent.model_adapter import ModelFactory
 from backend.app.domains.agent.run_context import RunCatalog, RunContext
 from backend.app.domains.agent.shell_guard import ShellGuard
+from backend.app.domains.agent.skills import SkillFiles
 from backend.app.domains.agent.subagents import build_subagents
 from backend.app.domains.artifacts.entities import ArtifactKind
 from backend.app.domains.artifacts.middleware import (
@@ -39,6 +45,7 @@ from backend.app.domains.artifacts.middleware import (
 )
 from backend.app.domains.artifacts.store import ArtifactStore
 from backend.app.shared.config import AppConfig
+from backend.app.shared.errors import PathEscapeError
 from backend.app.shared.llm_credentials import LLMCredentials
 
 logger = logging.getLogger(__name__)
@@ -67,21 +74,42 @@ class DeepAgentHarness:
         artifact_store: ArtifactStore,
         model_factory: ModelFactory | None = None,
         checkpointer: BaseCheckpointSaver[Any] | None = None,
+        global_skills_dir: Path | None = None,
+        memories_root: Path | None = None,
         max_cached_graphs: int = 8,
     ) -> None:
         self._config = config
         self._artifact_store = artifact_store
         self._model_factory = model_factory or ModelFactory()
         self._checkpointer = checkpointer
+        self._global_skills_dir = (global_skills_dir or config.skills_root).resolve()
+        self._memories_root = (memories_root or config.memories_root).resolve()
+        self._skill_files_accepts_global = (
+            "global_skills_dir" in inspect.signature(SkillFiles.__init__).parameters
+        )
         self._max_cached_graphs = max_cached_graphs
         self._graphs: OrderedDict[tuple[str, str], CompiledStateGraph[Any, Any, Any, Any]] = (
             OrderedDict()
         )
+        self._subdir_agents_by_key: dict[tuple[str, str], SubdirAgentsReadMiddleware] = {}
         self._shell_guard = ShellGuard()
 
     def set_checkpointer(self, checkpointer: BaseCheckpointSaver[Any] | None) -> None:
         self._checkpointer = checkpointer
         self._graphs.clear()
+        self._subdir_agents_by_key.clear()
+
+    async def delete_thread(self, session_id: str) -> None:
+        """Delete LangGraph checkpoints and in-memory session middleware caches for a session."""
+        for mw in self._subdir_agents_by_key.values():
+            mw.clear_session(session_id)
+        if self._checkpointer is not None and hasattr(self._checkpointer, "adelete_thread"):
+            setup_fn = getattr(self._checkpointer, "setup", None)
+            if callable(setup_fn):
+                maybe_coro = setup_fn()
+                if inspect.isawaitable(maybe_coro):
+                    await maybe_coro
+            await self._checkpointer.adelete_thread(session_id)
 
     def _get_or_build_graph(
         self,
@@ -97,12 +125,24 @@ class DeepAgentHarness:
         model = self._model_factory.build(creds)
         is_ask = mode == "ask"
         backend = (
-            DynamicRunBackend(self._config.bundled_skills_dir, read_only_workspace=True)
+            DynamicRunBackend(
+                self._config.bundled_skills_dir,
+                global_skills_dir=self._global_skills_dir,
+                read_only_workspace=True,
+            )
             if is_ask
-            else DynamicGuardedShellBackend(self._config.bundled_skills_dir)
+            else DynamicGuardedShellBackend(
+                self._config.bundled_skills_dir,
+                global_skills_dir=self._global_skills_dir,
+            )
         )
         permissions = _ASK_PERMISSIONS if is_ask else None
 
+        subdir_mw = SubdirAgentsReadMiddleware(skip_root=True)
+        memory_mw = DynamicMemoryMiddleware(
+            backend=backend,
+            sources=list(PROJECT_MEMORY_SOURCES),
+        )
         artifact_mw = ArtifactWorkflowMiddleware(
             artifact_store=self._artifact_store,
             get_run_info=self._current_artifact_info,
@@ -118,7 +158,8 @@ class DeepAgentHarness:
             middleware=[
                 TodoListMiddleware(),
                 RunPromptMiddleware(mode=mode),
-                SubdirAgentsReadMiddleware(),
+                memory_mw,
+                subdir_mw,
                 ToolErrorMiddleware(),
                 ModelRetryMiddleware(),
                 GitEvidenceMiddleware(),
@@ -128,8 +169,10 @@ class DeepAgentHarness:
         )
 
         self._graphs[cache_key] = graph
+        self._subdir_agents_by_key[cache_key] = subdir_mw
         while len(self._graphs) > self._max_cached_graphs:
-            self._graphs.popitem(last=False)
+            evicted_key, _ = self._graphs.popitem(last=False)
+            self._subdir_agents_by_key.pop(evicted_key, None)
         return graph
 
     @staticmethod
@@ -150,6 +193,22 @@ class DeepAgentHarness:
         verdict = guard.evaluate(command, mode)
         return verdict.action.value, verdict.reason
 
+    def _project_memory_dir(self, project_id: str | None) -> Path | None:
+        if not project_id or not project_id.strip():
+            return None
+        projects_root = (self._memories_root / "projects").resolve()
+        safe_id = Path(project_id).name
+        if not safe_id or safe_id in {".", ".."}:
+            raise PathEscapeError(project_id)
+        target = (projects_root / safe_id).resolve()
+        try:
+            target.relative_to(projects_root)
+        except ValueError as exc:
+            raise PathEscapeError(project_id) from exc
+        if target == projects_root:
+            raise PathEscapeError(project_id)
+        return target
+
     def _build_catalog(
         self,
         *,
@@ -157,16 +216,21 @@ class DeepAgentHarness:
         workspace_path: Path,
         mode: str,
         creds: LLMCredentials,
+        project_id: str | None = None,
     ) -> RunCatalog:
         artifacts_dir = self._artifact_store.session_dir(session_id)
         tracker = GitEvidenceTracker(workspace_path=workspace_path)
+        extra_skills = () if self._skill_files_accepts_global else (self._global_skills_dir,)
         return RunCatalog(
             session_id=session_id,
+            project_id=project_id or "",
             workspace_path=workspace_path.resolve(),
             mode=mode,
             artifacts_dir=artifacts_dir,
+            project_memory_dir=self._project_memory_dir(project_id),
             shell_guard=self._shell_guard,
             secret_values=(creds.api_key,),
+            extra_skills_dirs=extra_skills,
             git_tracker=tracker,
         )
 
@@ -178,6 +242,8 @@ class DeepAgentHarness:
         mode: str,
         user_message: str,
         creds: LLMCredentials,
+        project_id: str | None = None,
+        pinned_skills: list[str] | None = None,
     ) -> AsyncIterator[HarnessEvent]:
         graph = self._get_or_build_graph(creds, mode)
         catalog = self._build_catalog(
@@ -185,12 +251,18 @@ class DeepAgentHarness:
             workspace_path=workspace_path,
             mode=mode,
             creds=creds,
+            project_id=project_id,
         )
         run_input: dict[str, Any] = {
             "messages": [("user", user_message)],
             "skills_metadata": None,
             "plan_approved": False,
         }
+        cleaned_pins = [
+            s.strip() for s in (pinned_skills or []) if isinstance(s, str) and s.strip()
+        ]
+        if cleaned_pins:
+            run_input["pinned_skills"] = cleaned_pins
         async for ev in self._execute_stream(graph, catalog, run_input, creds):
             yield ev
 
@@ -203,6 +275,7 @@ class DeepAgentHarness:
         decision: str,
         feedback: str | None,
         creds: LLMCredentials,
+        project_id: str | None = None,
     ) -> AsyncIterator[HarnessEvent]:
         graph = self._get_or_build_graph(creds, mode)
         catalog = self._build_catalog(
@@ -210,6 +283,7 @@ class DeepAgentHarness:
             workspace_path=workspace_path,
             mode=mode,
             creds=creds,
+            project_id=project_id,
         )
         resume_payload: dict[str, Any] = {"decision": decision}
         if feedback:

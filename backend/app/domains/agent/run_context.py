@@ -24,6 +24,8 @@ class RunCatalog:
     mode: str
     artifacts_dir: Path
     shell_guard: ShellGuard
+    project_id: str = ""
+    project_memory_dir: Path | None = None
     secret_values: tuple[str, ...] = ()
     extra_skills_dirs: tuple[Path, ...] = ()
     git_tracker: GitEvidenceTracker | None = field(default=None, compare=False)

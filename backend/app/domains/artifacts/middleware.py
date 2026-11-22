@@ -75,17 +75,37 @@ class ArtifactWorkflowMiddleware(AgentMiddleware[ArtifactWorkflowState, Any, Any
 
         if tool_name in _MUTATING_WORKSPACE_TOOLS:
             file_path = str(args.get("file_path") or "")
-            is_artifact_write = file_path.startswith("/artifacts/")
+            normalized_path = "/" + file_path.strip().lstrip("/")
+            is_artifact_write = normalized_path == "/artifacts" or normalized_path.startswith(
+                "/artifacts/"
+            )
+            is_memory_write = (
+                normalized_path == "/memories/project"
+                or normalized_path.startswith("/memories/project/")
+            )
+            if info.mode == "ask" and is_memory_write:
+                return ToolMessage(
+                    content="Project memory is read-only in Ask mode.",
+                    name=tool_name,
+                    tool_call_id=tool_call_id,
+                    status="error",
+                )
             if (
                 info.mode == "plan"
                 and not is_artifact_write
                 and not request.state.get("plan_approved", False)
             ):
-                return ToolMessage(
-                    content=(
+                blocked_msg = (
+                    "Plan approval required before updating project memory. "
+                    "Finish writing /artifacts/implementation_plan.md first."
+                    if is_memory_write
+                    else (
                         "Plan approval required before editing workspace files. "
                         "Finish writing /artifacts/implementation_plan.md first."
-                    ),
+                    )
+                )
+                return ToolMessage(
+                    content=blocked_msg,
                     name=tool_name,
                     tool_call_id=tool_call_id,
                     status="error",

@@ -60,6 +60,14 @@ class Project(BaseModel):
     updated_at: datetime
 
 
+class ProjectMemory(BaseModel):
+    project_id: str
+    content: str = ""
+    updated_at: datetime | None = None
+    has_repo_agents_md: bool = False
+    max_bytes: int = 32 * 1024
+
+
 class Session(BaseModel):
     id: str
     project_id: str | None = None
