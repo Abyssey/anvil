@@ -40,6 +40,7 @@ function makeWorkspaceValue(overrides: Partial<WorkspaceState> = {}): WorkspaceC
     sessions: [baseSession],
     activeSession: baseSession,
     messages: [],
+    turnDurationsMs: {},
     hasMoreMessages: false,
     isLoadingOlderMessages: false,
     streamingAssistant: null,

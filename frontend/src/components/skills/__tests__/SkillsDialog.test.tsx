@@ -74,6 +74,7 @@ function makeSkillsMockValue(
     sessions: [baseSession],
     activeSession: baseSession,
     messages: [],
+    turnDurationsMs: {},
     hasMoreMessages: false,
     isLoadingOlderMessages: false,
     streamingAssistant: null,
