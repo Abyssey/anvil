@@ -26,15 +26,26 @@ _READ_ONLY_ERROR = "Skills storage is read-only."
 
 
 class SkillFiles(BackendProtocol):
-    """Virtual read-only filesystem exposing bundled + target-workspace skills."""
+    """Virtual read-only filesystem exposing bundled, global, and workspace skills."""
 
-    def __init__(self, bundled_skills_dir: Path) -> None:
+    def __init__(
+        self,
+        bundled_skills_dir: Path,
+        global_skills_dir: Path | None = None,
+    ) -> None:
         self._bundled_skills_dir = bundled_skills_dir
+        self._global_skills_dir = global_skills_dir
 
     def _skill_roots(self) -> list[Path]:
         roots: list[Path] = []
         if self._bundled_skills_dir.is_dir():
             roots.append(self._bundled_skills_dir)
+        if (
+            self._global_skills_dir is not None
+            and self._global_skills_dir.is_dir()
+            and self._global_skills_dir not in roots
+        ):
+            roots.append(self._global_skills_dir)
         catalog = RunContext.current_or_none()
         if catalog is not None:
             for candidate in (
