@@ -109,7 +109,7 @@ function renderComposer(value: WorkspaceContextValue) {
 }
 
 describe("UserQuestionCard docked above Composer", () => {
-  it("renders numbered single-select options with (Recommended), Other input, collapse toggle, and submits chosen answer", () => {
+  it("renders neutral Kbd keycaps, (Recommended) options, inline Other + actions, collapse toggle, and keyboard shortcuts", () => {
     const val = makeMockValue({
       kind: "user_question",
       summary: "어떤 저장소를 사용할까요?",
@@ -127,9 +127,15 @@ describe("UserQuestionCard docked above Composer", () => {
         },
       ],
     });
-    renderComposer(val);
+    const { container } = renderComposer(val);
 
     expect(screen.getByText("어떤 저장소를 사용할까요?")).toBeInTheDocument();
+    // Neutral Kbd keycaps (1, 2, 3) rendered instead of colored Badges
+    expect(screen.getByRole("img", { name: "1" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "2" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "3" })).toBeInTheDocument();
+    expect(container.querySelector(".astryx-card")?.querySelectorAll("kbd")).toHaveLength(3);
+
     const recOption = screen.getByRole("button", {
       name: /\(Recommended\) SQLite 로컬 저장/i,
     });
@@ -139,9 +145,10 @@ describe("UserQuestionCard docked above Composer", () => {
     const submitBtn = screen.getByRole("button", { name: "Submit" });
     expect(submitBtn).toHaveAttribute("aria-disabled", "true");
 
-    // Keyboard shortcut '1' selects first option
+    // Keyboard shortcut '1' via useHotkeys selects first option without turning Kbd into an info Badge
     fireEvent.keyDown(window, { key: "1" });
     expect(recOption).toHaveAttribute("aria-current", "true");
+    expect(container.querySelector('[data-variant="info"]')).toBeNull();
 
     // Collapse & expand cleanly
     fireEvent.click(screen.getByRole("button", { name: "Collapse question" }));
@@ -153,7 +160,13 @@ describe("UserQuestionCard docked above Composer", () => {
       screen.getByRole("list", { name: "어떤 저장소를 사용할까요?" }),
     ).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    // Pressing Enter while focused on Skip button does NOT hijack Enter into Submit
+    const skipBtn = screen.getByRole("button", { name: "Skip" });
+    fireEvent.keyDown(skipBtn, { key: "Enter" });
+    expect(val.actions.resumeInterrupt).not.toHaveBeenCalled();
+
+    // Pressing bare Enter on non-interactive window submits the selected option
+    fireEvent.keyDown(window, { key: "Enter" });
     expect(val.actions.resumeInterrupt).toHaveBeenCalledWith("answer", undefined, [
       {
         question: "어떤 저장소를 사용할까요?",
@@ -163,7 +176,7 @@ describe("UserQuestionCard docked above Composer", () => {
     ]);
   });
 
-  it("supports multi-question 1/2 stepping with Next, Back, and Other free-text answer", () => {
+  it("supports multi-question 1/2 stepping, Back, and IME-safe Enter in Other input", () => {
     const val = makeMockValue({
       kind: "user_question",
       summary: "질문 1",
@@ -193,11 +206,19 @@ describe("UserQuestionCard docked above Composer", () => {
     expect(screen.getByText("2 / 2")).toBeInTheDocument();
     expect(screen.getByText("질문 2: 배포 대상은?")).toBeInTheDocument();
 
-    // Type custom answer into Other input
+    // Shortcut '3' focuses Other input
     const otherInput = screen.getByPlaceholderText("Other (write your answer)");
-    fireEvent.change(otherInput, { target: { value: "사내 Kubernetes 클러스터" } });
-    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    fireEvent.keyDown(window, { key: "3" });
+    expect(document.activeElement).toBe(otherInput);
 
+    fireEvent.change(otherInput, { target: { value: "사내 Kubernetes 클러스터" } });
+
+    // IME composing Enter (isComposing: true or keyCode: 229) must NOT prematurely submit
+    fireEvent.keyDown(otherInput, { key: "Enter", isComposing: true, keyCode: 229 });
+    expect(val.actions.resumeInterrupt).not.toHaveBeenCalled();
+
+    // Committed Enter submits
+    fireEvent.keyDown(otherInput, { key: "Enter", isComposing: false, keyCode: 13 });
     expect(val.actions.resumeInterrupt).toHaveBeenCalledWith("answer", undefined, [
       {
         question: "질문 1: 테마 스타일은?",
@@ -212,7 +233,7 @@ describe("UserQuestionCard docked above Composer", () => {
     ]);
   });
 
-  it("calls resumeInterrupt(skip) when Skip is clicked", () => {
+  it("calls resumeInterrupt(skip) when Skip or Dismiss (×) is clicked", () => {
     const val = makeMockValue({
       kind: "user_question",
       summary: "테스트 프레임워크는?",
@@ -228,7 +249,7 @@ describe("UserQuestionCard docked above Composer", () => {
     });
     renderComposer(val);
 
-    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss question" }));
     expect(val.actions.resumeInterrupt).toHaveBeenCalledWith("skip", undefined, [
       { question: "테스트 프레임워크는?", skipped: true },
     ]);

@@ -2,17 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
+import { useHotkeys, type Hotkey } from "@astryxdesign/core/hooks";
 import { Icon } from "@astryxdesign/core/Icon";
+import { IconButton } from "@astryxdesign/core/IconButton";
+import { Kbd } from "@astryxdesign/core/Kbd";
 import { List, ListItem } from "@astryxdesign/core/List";
-import { HStack, VStack } from "@astryxdesign/core/Stack";
+import { HStack, StackItem, VStack } from "@astryxdesign/core/Stack";
 import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
-import {
-  CheckIcon,
-  ChevronDownIcon,
-  ChevronUpIcon,
-  QuestionMarkCircleIcon,
-} from "@heroicons/react/24/outline";
+import { QuestionMarkCircleIcon } from "@heroicons/react/20/solid";
 import type { PendingInterrupt, QuestionAnswer, UserQuestionItem } from "../../api/types";
 import { useWorkspace } from "../../state/workspaceContext";
 
@@ -26,17 +24,22 @@ function emptyDraft(): StepDraft {
   return { selectedOption: null, customText: "", useCustom: false };
 }
 
-function isEditableTarget(target: EventTarget | null): boolean {
+function isInteractiveElement(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
     return false;
   }
-  const tag = target.tagName;
-  return (
-    tag === "INPUT" ||
-    tag === "TEXTAREA" ||
-    tag === "SELECT" ||
-    target.isContentEditable
+  return Boolean(
+    target.closest(
+      'button, a, input, textarea, select, [role="button"], [contenteditable="true"]',
+    ),
   );
+}
+
+function readNarrowViewport(): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return false;
+  }
+  return window.matchMedia("(max-width: 560px)").matches;
 }
 
 export interface UserQuestionCardProps {
@@ -59,8 +62,20 @@ export function UserQuestionCard({ pending }: UserQuestionCardProps) {
 
   const [stepIndex, setStepIndex] = useState(0);
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isNarrowViewport, setIsNarrowViewport] = useState<boolean>(readNarrowViewport);
   const [drafts, setDrafts] = useState<StepDraft[]>(() => questions.map(() => emptyDraft()));
   const otherInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return;
+    }
+    const mql = window.matchMedia("(max-width: 560px)");
+    const onChange = (e: MediaQueryListEvent) => setIsNarrowViewport(e.matches);
+    setIsNarrowViewport(mql.matches);
+    mql.addEventListener("change", onChange);
+    return () => mql.removeEventListener("change", onChange);
+  }, []);
 
   useEffect(() => {
     setStepIndex(0);
@@ -149,181 +164,253 @@ export function UserQuestionCard({ pending }: UserQuestionCardProps) {
     void actions.resumeInterrupt("skip", undefined, buildAnswersPayload(true));
   }, [actions, buildAnswersPayload, state.isStreaming]);
 
-  useEffect(() => {
-    if (isCollapsed || state.isStreaming) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey || isEditableTarget(e.target)) {
-        return;
-      }
-      if (/^[1-9]$/.test(e.key)) {
-        const num = Number(e.key);
-        const opt = currentQuestion.options[num - 1];
-        if (opt) {
-          e.preventDefault();
-          selectOption(opt.label);
-        } else if (num === currentQuestion.options.length + 1) {
-          e.preventDefault();
+  const otherIndex = currentQuestion.options.length + 1;
+  const shortcutsDisabled = isCollapsed || state.isStreaming;
+
+  const hotkeys = useMemo(() => {
+    const entries: Hotkey[] = currentQuestion.options.slice(0, 8).map((opt, idx) => ({
+      keys: String(idx + 1),
+      isDisabled: shortcutsDisabled,
+      onPress: () => selectOption(opt.label),
+    }));
+    if (otherIndex <= 9) {
+      entries.push({
+        keys: String(otherIndex),
+        isDisabled: shortcutsDisabled,
+        onPress: () => {
           updateCurrentDraft((prev) => ({ ...prev, useCustom: true }));
           otherInputRef.current?.focus();
-        }
-        return;
-      }
-      if (e.key === "Enter" && canAdvance) {
-        e.preventDefault();
-        handlePrimaryAction();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+        },
+      });
+    }
+    entries.push({
+      keys: "mod+enter",
+      allowInInputs: true,
+      isDisabled: shortcutsDisabled || !canAdvance,
+      onPress: handlePrimaryAction,
+    });
+    return entries;
   }, [
     canAdvance,
     currentQuestion.options,
     handlePrimaryAction,
-    isCollapsed,
+    otherIndex,
     selectOption,
-    state.isStreaming,
+    shortcutsDisabled,
     updateCurrentDraft,
   ]);
 
-  const otherIndex = currentQuestion.options.length + 1;
-  const isOtherSelected = currentDraft.useCustom && currentDraft.customText.trim().length > 0;
+  useHotkeys(hotkeys);
+
+  useEffect(() => {
+    if (shortcutsDisabled || !canAdvance) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key !== "Enter" ||
+        event.defaultPrevented ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.shiftKey ||
+        event.isComposing ||
+        event.keyCode === 229 ||
+        isInteractiveElement(event.target)
+      ) {
+        return;
+      }
+      event.preventDefault();
+      handlePrimaryAction();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [canAdvance, handlePrimaryAction, shortcutsDisabled]);
 
   return (
-    <Card padding={3} elevation="low">
-      <VStack gap={2} width="100%">
-        <HStack hAlign="between" vAlign="start" gap={2} width="100%">
-          <HStack gap={2} vAlign="start">
-            <Icon icon={QuestionMarkCircleIcon} size="sm" color="secondary" />
-            <Text type="label" weight="semibold">
+    <Card padding={3} elevation="none">
+      <VStack gap={1.5} width="100%">
+        <HStack gap={2} vAlign="start" width="100%">
+          <StackItem size="static">
+            <Icon icon={QuestionMarkCircleIcon} size="md" color="secondary" />
+          </StackItem>
+
+          <StackItem size="fill">
+            <Text type="body" weight="semibold">
               {currentQuestion.question}
             </Text>
-          </HStack>
+          </StackItem>
 
-          <HStack gap={1.5} vAlign="center">
-            {isMultiStep && (
-              <Badge label={`${stepIndex + 1} / ${questions.length}`} variant="neutral" />
-            )}
-            <Button
-              label={isCollapsed ? "Expand question" : "Collapse question"}
-              variant="ghost"
-              size="sm"
-              isIconOnly
-              icon={
-                <Icon
-                  icon={isCollapsed ? ChevronUpIcon : ChevronDownIcon}
-                  size="sm"
-                />
-              }
-              onClick={() => setIsCollapsed((prev) => !prev)}
-            />
-          </HStack>
+          <StackItem size="static">
+            <HStack gap={0.5} vAlign="center">
+              {isMultiStep && (
+                <Badge label={`${stepIndex + 1} / ${questions.length}`} variant="neutral" />
+              )}
+              <IconButton
+                label={isCollapsed ? "Expand question" : "Collapse question"}
+                variant="ghost"
+                size="sm"
+                icon={<Icon icon={isCollapsed ? "chevronRight" : "chevronDown"} />}
+                onClick={() => setIsCollapsed((prev) => !prev)}
+              />
+              <IconButton
+                label="Dismiss question"
+                variant="ghost"
+                size="sm"
+                icon={<Icon icon="close" />}
+                isDisabled={state.isStreaming}
+                onClick={handleSkip}
+              />
+            </HStack>
+          </StackItem>
         </HStack>
 
         {!isCollapsed && (
-          <VStack gap={2} width="100%">
-            <List
-              density="compact"
-              edge="outset"
-              aria-label={currentQuestion.question}
-            >
-              {currentQuestion.options.map((opt, idx) => {
-                const isSelected =
-                  !currentDraft.useCustom && currentDraft.selectedOption === opt.label;
-                const displayText = opt.recommended
-                  ? `(Recommended) ${opt.label}`
-                  : opt.label;
-                return (
-                  <ListItem
-                    key={`${idx}-${opt.label}`}
-                    align="first-line"
-                    isSelected={isSelected}
-                    isDisabled={state.isStreaming}
-                    startContent={
-                      <Badge
-                        label={String(idx + 1)}
-                        variant={isSelected ? "info" : "neutral"}
-                      />
-                    }
-                    label={
-                      <Text
-                        type="body"
-                        weight={isSelected ? "semibold" : undefined}
-                      >
-                        {displayText}
-                      </Text>
-                    }
-                    description={
-                      opt.description ? (
-                        <Text type="supporting" color="secondary">
-                          {opt.description}
+          <VStack gap={1.5} width="100%">
+            {currentQuestion.options.length > 0 && (
+              <List
+                density="compact"
+                edge="outset"
+                aria-label={currentQuestion.question}
+              >
+                {currentQuestion.options.map((opt, idx) => {
+                  const isSelected =
+                    !currentDraft.useCustom && currentDraft.selectedOption === opt.label;
+                  const displayText = opt.recommended
+                    ? `(Recommended) ${opt.label}`
+                    : opt.label;
+                  return (
+                    <ListItem
+                      key={`${idx}-${opt.label}`}
+                      align="first-line"
+                      isSelected={isSelected}
+                      isDisabled={state.isStreaming}
+                      startContent={<Kbd keys={String(idx + 1)} />}
+                      label={
+                        <Text
+                          type="body"
+                          weight={isSelected ? "semibold" : undefined}
+                        >
+                          {displayText}
                         </Text>
-                      ) : undefined
-                    }
-                    endContent={
-                      isSelected ? <Icon icon={CheckIcon} size="sm" /> : undefined
-                    }
-                    onClick={() => selectOption(opt.label)}
-                  />
-                );
-              })}
+                      }
+                      description={
+                        opt.description ? (
+                          <Text type="supporting" color="secondary">
+                            {opt.description}
+                          </Text>
+                        ) : undefined
+                      }
+                      endContent={
+                        isSelected ? <Icon icon="check" size="sm" /> : undefined
+                      }
+                      onClick={() => selectOption(opt.label)}
+                    />
+                  );
+                })}
+              </List>
+            )}
 
-              <ListItem
-                align="center"
-                isSelected={isOtherSelected}
-                isDisabled={state.isStreaming}
-                interactiveRef={otherInputRef}
-                startContent={
-                  <Badge
-                    label={String(otherIndex)}
-                    variant={isOtherSelected ? "info" : "neutral"}
+            {isNarrowViewport ? (
+              <VStack gap={1.5} width="100%">
+                <HStack gap={2} vAlign="center" width="100%">
+                  <StackItem size="static">
+                    <Kbd keys={String(otherIndex)} />
+                  </StackItem>
+                  <StackItem size="fill">
+                    <TextInput
+                      ref={otherInputRef}
+                      label="Other (write your answer)"
+                      isLabelHidden
+                      size="sm"
+                      width="100%"
+                      value={currentDraft.customText}
+                      isDisabled={state.isStreaming}
+                      placeholder="Other (write your answer)"
+                      enterKeyHint={isLastStep ? "send" : "next"}
+                      hasClear
+                      onChange={handleOtherChange}
+                      onEnter={handlePrimaryAction}
+                    />
+                  </StackItem>
+                </HStack>
+
+                <HStack gap={1} vAlign="center" hAlign="end" width="100%">
+                  {isMultiStep && stepIndex > 0 && (
+                    <Button
+                      label="Back"
+                      variant="ghost"
+                      size="sm"
+                      isDisabled={state.isStreaming}
+                      onClick={() => setStepIndex((idx) => Math.max(0, idx - 1))}
+                    />
+                  )}
+                  <Button
+                    label="Skip"
+                    variant="ghost"
+                    size="sm"
+                    isDisabled={state.isStreaming}
+                    onClick={handleSkip}
                   />
-                }
-                label={
+                  <Button
+                    label={isLastStep ? "Submit" : "Next"}
+                    variant="primary"
+                    size="sm"
+                    isDisabled={!canAdvance}
+                    onClick={handlePrimaryAction}
+                  />
+                </HStack>
+              </VStack>
+            ) : (
+              <HStack gap={2} vAlign="center" width="100%">
+                <StackItem size="static">
+                  <Kbd keys={String(otherIndex)} />
+                </StackItem>
+
+                <StackItem size="fill">
                   <TextInput
                     ref={otherInputRef}
                     label="Other (write your answer)"
                     isLabelHidden
                     size="sm"
+                    width="100%"
                     value={currentDraft.customText}
                     isDisabled={state.isStreaming}
                     placeholder="Other (write your answer)"
+                    enterKeyHint={isLastStep ? "send" : "next"}
+                    hasClear
                     onChange={handleOtherChange}
                     onEnter={handlePrimaryAction}
                   />
-                }
-              />
-            </List>
+                </StackItem>
 
-            <HStack hAlign="between" vAlign="center" gap={2} width="100%">
-              <HStack gap={1} vAlign="center">
-                {isMultiStep && stepIndex > 0 && (
-                  <Button
-                    label="Back"
-                    variant="ghost"
-                    size="sm"
-                    isDisabled={state.isStreaming}
-                    onClick={() => setStepIndex((idx) => Math.max(0, idx - 1))}
-                  />
-                )}
+                <StackItem size="static">
+                  <HStack gap={1} vAlign="center">
+                    {isMultiStep && stepIndex > 0 && (
+                      <Button
+                        label="Back"
+                        variant="ghost"
+                        size="sm"
+                        isDisabled={state.isStreaming}
+                        onClick={() => setStepIndex((idx) => Math.max(0, idx - 1))}
+                      />
+                    )}
+                    <Button
+                      label="Skip"
+                      variant="ghost"
+                      size="sm"
+                      isDisabled={state.isStreaming}
+                      onClick={handleSkip}
+                    />
+                    <Button
+                      label={isLastStep ? "Submit" : "Next"}
+                      variant="primary"
+                      size="sm"
+                      isDisabled={!canAdvance}
+                      onClick={handlePrimaryAction}
+                    />
+                  </HStack>
+                </StackItem>
               </HStack>
-
-              <HStack gap={1.5} vAlign="center">
-                <Button
-                  label="Skip"
-                  variant="ghost"
-                  size="sm"
-                  isDisabled={state.isStreaming}
-                  onClick={handleSkip}
-                />
-                <Button
-                  label={isLastStep ? "Submit" : "Next"}
-                  variant="primary"
-                  size="sm"
-                  isDisabled={!canAdvance}
-                  onClick={handlePrimaryAction}
-                />
-              </HStack>
-            </HStack>
+            )}
           </VStack>
         )}
       </VStack>

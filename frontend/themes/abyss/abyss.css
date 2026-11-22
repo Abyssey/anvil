@@ -419,7 +419,8 @@
   }
 
   .astryx-item[data-selected="selected"] {
-    --color-text-secondary: light-dark(#474747, #c6c6c6);
+    --color-text-secondary: light-dark(#334155, #cbd5e1);
+    background-color: light-dark(rgba(15, 23, 42, 0.09), rgba(255, 255, 255, 0.13));
   }
 
   .astryx-tree-list-item[data-selected="selected"] {
@@ -536,7 +537,17 @@
   }
 
   .astryx-card {
+    border-radius: 14px;
     --astryx-card-padding: var(--spacing-3);
+    --_card-radius: 14px;
+    --_card-radius-top-left: 14px;
+    --_card-radius-top-right: 14px;
+    --_card-radius-bottom-right: 14px;
+    --_card-radius-bottom-left: 14px;
+    --_card-radius-start-start: initial;
+    --_card-radius-start-end: initial;
+    --_card-radius-end-start: initial;
+    --_card-radius-end-end: initial;
   }
 
   .astryx-card[data-variant="blue"] {
@@ -650,6 +661,21 @@
   .astryx-collapsible-content {
     padding-block-start: 2px;
     padding-block-end: 4px;
+  }
+
+  .astryx-text-input {
+    border-radius: 8px;
+  }
+
+  .astryx-text-input[data-size="sm"] {
+    border-radius: 6px;
+  }
+
+  .astryx-kbd-key {
+    min-width: 20px;
+    height: 20px;
+    border-radius: 5px;
+    font-variant-numeric: tabular-nums;
   }
 
   .astryx-text[data-color="primary"] { color: var(--color-text-primary); }

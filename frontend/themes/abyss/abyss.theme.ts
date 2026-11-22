@@ -121,5 +121,32 @@ export const abyssTheme = defineTheme({
         paddingBlockEnd: '4px',
       },
     },
+    card: {
+      base: {
+        borderRadius: '14px',
+      },
+    },
+    'text-input': {
+      base: {
+        borderRadius: '8px',
+      },
+      'size:sm': {
+        borderRadius: '6px',
+      },
+    },
+    item: {
+      selected: {
+        backgroundColor: 'light-dark(rgba(15, 23, 42, 0.09), rgba(255, 255, 255, 0.13))',
+        '--color-text-secondary': 'light-dark(#334155, #cbd5e1)',
+      },
+    },
+    'kbd-key': {
+      base: {
+        minWidth: '20px',
+        height: '20px',
+        borderRadius: '5px',
+        fontVariantNumeric: 'tabular-nums',
+      },
+    },
   },
 });

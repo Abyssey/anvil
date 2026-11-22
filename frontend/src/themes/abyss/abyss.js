@@ -322,7 +322,8 @@ export const abyssTheme = {
     },
     "item": {
       "selected": {
-        "--color-text-secondary": "light-dark(#474747, #c6c6c6)"
+        "--color-text-secondary": "light-dark(#334155, #cbd5e1)",
+        "backgroundColor": "light-dark(rgba(15, 23, 42, 0.09), rgba(255, 255, 255, 0.13))"
       }
     },
     "tree-list-item": {
@@ -434,7 +435,8 @@ export const abyssTheme = {
     },
     "card": {
       "base": {
-        "padding": "var(--spacing-3)"
+        "padding": "var(--spacing-3)",
+        "borderRadius": "14px"
       },
       "variant:blue": {
         "--color-text-secondary": "light-dark(#474747, #b9b9b9)"
@@ -549,6 +551,22 @@ export const abyssTheme = {
       "base": {
         "paddingBlockStart": "2px",
         "paddingBlockEnd": "4px"
+      }
+    },
+    "text-input": {
+      "base": {
+        "borderRadius": "8px"
+      },
+      "size:sm": {
+        "borderRadius": "6px"
+      }
+    },
+    "kbd-key": {
+      "base": {
+        "minWidth": "20px",
+        "height": "20px",
+        "borderRadius": "5px",
+        "fontVariantNumeric": "tabular-nums"
       }
     }
   },
