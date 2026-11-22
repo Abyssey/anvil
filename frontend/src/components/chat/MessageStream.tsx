@@ -19,6 +19,10 @@ import { HStack, VStack } from "@astryxdesign/core/Stack";
 import { Text } from "@astryxdesign/core/Text";
 import type { ToolCallRecord } from "../../api/types";
 import { useWorkspace } from "../../state/workspaceContext";
+import {
+  ABYSS_MARKDOWN_PLUGINS,
+  ABYSS_STREAMING_MARKDOWN_PLUGINS,
+} from "../markdown/markdownPlugins";
 import { Composer } from "./Composer";
 import { ShellApprovalCard } from "./ShellApprovalCard";
 
@@ -43,7 +47,7 @@ function toChatToolCalls(records: ToolCallRecord[]): ChatToolCallItem[] {
     status: tc.status === "running" ? "running" : tc.status === "error" ? "error" : "complete",
     node: tc.subagent ?? undefined,
     resultDetail: tc.output ? (
-      <CodeBlock code={tc.output} language="text" maxHeight={180} width="100%" />
+      <CodeBlock code={tc.output} language="plaintext" maxHeight={180} width="100%" />
     ) : undefined,
   }));
 }
@@ -261,7 +265,9 @@ export function MessageStream() {
                     }
                   >
                     <ChatMessageBubble variant="ghost">
-                      <Markdown density="compact">{msg.thinking}</Markdown>
+                      <Markdown density="compact" plugins={ABYSS_MARKDOWN_PLUGINS}>
+                        {msg.thinking}
+                      </Markdown>
                     </ChatMessageBubble>
                   </Collapsible>
                 )}
@@ -270,7 +276,9 @@ export function MessageStream() {
                 )}
                 {msg.content && (
                   <ChatMessageBubble variant="ghost">
-                    <Markdown density="compact">{msg.content}</Markdown>
+                    <Markdown density="compact" plugins={ABYSS_MARKDOWN_PLUGINS}>
+                      {msg.content}
+                    </Markdown>
                   </ChatMessageBubble>
                 )}
               </ChatMessage>
@@ -289,7 +297,11 @@ export function MessageStream() {
                   }
                 >
                   <ChatMessageBubble variant="ghost">
-                    <Markdown density="compact" isStreaming>
+                    <Markdown
+                      density="compact"
+                      isStreaming
+                      plugins={ABYSS_STREAMING_MARKDOWN_PLUGINS}
+                    >
                       {state.streamingAssistant.thinking}
                     </Markdown>
                   </ChatMessageBubble>
@@ -303,7 +315,11 @@ export function MessageStream() {
               )}
               {state.streamingAssistant.content && (
                 <ChatMessageBubble variant="ghost">
-                  <Markdown density="compact" isStreaming>
+                  <Markdown
+                    density="compact"
+                    isStreaming
+                    plugins={ABYSS_STREAMING_MARKDOWN_PLUGINS}
+                  >
                     {state.streamingAssistant.content}
                   </Markdown>
                 </ChatMessageBubble>

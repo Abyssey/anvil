@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Collapsible } from "@astryxdesign/core/Collapsible";
@@ -12,12 +12,19 @@ import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import type { ArtifactKind } from "../../api/types";
 import { useWorkspace } from "../../state/workspaceContext";
+import { ABYSS_MARKDOWN_PLUGINS } from "../markdown/markdownPlugins";
 
 export function ArtifactDrawer() {
   const { state, actions } = useWorkspace();
   const [feedback, setFeedback] = useState("");
   const [saveRelPath, setSaveRelPath] = useState("docs/ONBOARDING.md");
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const activeSessionId = state.activeSession?.id ?? null;
+
+  useEffect(() => {
+    setFeedback("");
+    setSaveMessage(null);
+  }, [activeSessionId]);
 
   const activeDoc = state.artifacts.artifacts.find((a) => a.kind === state.activeArtifactTab);
   const pendingPlanReview = state.activeSession?.pending_interrupt?.kind === "plan_review";
@@ -96,7 +103,9 @@ export function ArtifactDrawer() {
       <Section variant="transparent" padding={2}>
         {activeDoc ? (
           <VStack gap={4}>
-            <Markdown density="compact">{activeDoc.content}</Markdown>
+            <Markdown density="compact" plugins={ABYSS_MARKDOWN_PLUGINS}>
+              {activeDoc.content}
+            </Markdown>
 
             {state.activeArtifactTab === "walkthrough" && chunks.length > 0 && (
               <VStack gap={2}>

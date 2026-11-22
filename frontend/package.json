@@ -13,9 +13,11 @@
     "@astryxdesign/core": "^0.7.17",
     "@astryxdesign/theme-neutral": "^0.7.17",
     "@heroicons/react": "^2.2.0",
+    "@probelabs/maid": "^0.0.29",
     "@stylexjs/stylex": "^0.19.2",
-    "dompurify": "^3.2.4",
+    "dompurify": "^3.5.0",
     "marked": "^15.0.7",
+    "pele": "^1.13.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
