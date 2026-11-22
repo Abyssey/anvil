@@ -21,13 +21,32 @@ export interface ChatMessage {
   created_at: string;
 }
 
+export interface QuestionOption {
+  label: string;
+  description?: string | null;
+  recommended?: boolean;
+}
+
+export interface UserQuestionItem {
+  question: string;
+  options: QuestionOption[];
+}
+
+export interface QuestionAnswer {
+  question: string;
+  selected_option?: string | null;
+  custom_text?: string | null;
+  skipped?: boolean;
+}
+
 export interface PendingInterrupt {
-  kind: "plan_review" | "shell_approval";
+  kind: "plan_review" | "shell_approval" | "user_question";
   summary: string;
   artifact_kind?: string | null;
   command?: string | null;
   workspace?: string | null;
   reason?: string | null;
+  questions?: UserQuestionItem[];
 }
 
 export interface Project {

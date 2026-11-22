@@ -184,7 +184,7 @@ export function WorkspaceShell() {
           footer={
             <VStack padding={3}>
               <Button
-                label={meta.configured ? state.settings.model : "Configure LLM"}
+                label={meta.configured ? "LLM Settings" : "Configure LLM"}
                 variant={meta.configured ? "secondary" : "primary"}
                 width="100%"
                 icon={<Icon icon={Cog6ToothIcon} size="sm" />}

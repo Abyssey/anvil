@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterable
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, Depends, Query, status
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, Field
 
@@ -13,6 +13,7 @@ from backend.app.domains.sessions.entities import (
     ChatMessage,
     Project,
     ProjectMemory,
+    QuestionAnswer,
     RunMode,
     Session,
 )
@@ -61,8 +62,9 @@ class StreamMessageRequest(BaseModel):
 
 
 class ResumeInterruptRequest(BaseModel):
-    decision: Literal["approve", "revise", "deny"]
+    decision: Literal["approve", "revise", "deny", "answer", "skip"]
     feedback: str | None = None
+    answers: list[QuestionAnswer] = Field(default_factory=list)
 
 
 @projects_router.get("")
@@ -197,17 +199,27 @@ async def stream_session_message(
         yield ServerSentEvent(event=ev.event, data=ev.data)
 
 
+async def _validate_resume_dep(
+    session_id: str,
+    body: ResumeInterruptRequest,
+    service: SessionServiceDep,
+) -> Session:
+    return await service.validate_resume(session_id, body.decision)
+
+
 @router.post("/{session_id}/resume", response_class=EventSourceResponse)
 async def resume_session_interrupt(
     session_id: str,
     body: ResumeInterruptRequest,
     creds: LLMCredentialsDep,
     service: SessionServiceDep,
+    _validated: Annotated[Session, Depends(_validate_resume_dep)],
 ) -> AsyncIterable[ServerSentEvent]:
     async for ev in service.stream_resume(
         session_id=session_id,
         decision=body.decision,
         feedback=body.feedback,
         creds=creds,
+        answers=body.answers,
     ):
         yield ServerSentEvent(event=ev.event, data=ev.data)

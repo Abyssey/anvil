@@ -476,14 +476,29 @@ export const abyssTheme = {
         "color": "#e6edf3",
         "borderWidth": "1px",
         "borderStyle": "solid",
-        "borderColor": "#30363d"
+        "borderColor": "#30363d",
+        "borderRadius": "8px",
+        "fontSize": "0.78125rem",
+        "lineHeight": "1.5",
+        "--spacing-3": "8px",
+        "--spacing-4": "12px"
+      },
+      "size:sm": {
+        "borderRadius": "6px",
+        "fontSize": "0.75rem",
+        "lineHeight": "1.45",
+        "--spacing-3": "5px",
+        "--spacing-4": "10px"
       }
     },
     "code-block-header": {
       "base": {
         "backgroundColor": "#161b22",
         "borderBottomColor": "#30363d",
-        "color": "#c9d1d9"
+        "color": "#c9d1d9",
+        "fontSize": "0.75rem",
+        "--spacing-2": "4px",
+        "--spacing-4": "12px"
       }
     },
     "code-block-title": {
@@ -502,7 +517,38 @@ export const abyssTheme = {
         "borderWidth": "1px",
         "borderStyle": "solid",
         "borderColor": "light-dark(#c7d2fe, #3b4768)",
-        "color": "light-dark(#3730a3, #a5b4fc)"
+        "color": "light-dark(#3730a3, #a5b4fc)",
+        "borderRadius": "4px",
+        "paddingBlock": "1px",
+        "paddingInline": "5px",
+        "fontSize": "0.85em"
+      }
+    },
+    "chat-tool-calls": {
+      "base": {
+        "marginBlockStart": "0px"
+      }
+    },
+    "chat-message-bubble": {
+      "variant:ghost": {
+        "paddingInline": "0px",
+        "paddingBlock": "4px"
+      }
+    },
+    "chat-message-metadata": {
+      "base": {
+        "marginBlockStart": "2px"
+      }
+    },
+    "collapsible-trigger": {
+      "base": {
+        "paddingBlock": "2px"
+      }
+    },
+    "collapsible-content": {
+      "base": {
+        "paddingBlockStart": "2px",
+        "paddingBlockEnd": "4px"
       }
     }
   },

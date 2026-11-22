@@ -586,12 +586,28 @@
     border-width: 1px;
     border-style: solid;
     border-color: #30363d;
+    border-radius: 8px;
+    font-size: 0.78125rem;
+    line-height: 1.5;
+    --spacing-3: 8px;
+    --spacing-4: 12px;
+  }
+
+  .astryx-code-block[data-size="sm"] {
+    border-radius: 6px;
+    font-size: 0.75rem;
+    line-height: 1.45;
+    --spacing-3: 5px;
+    --spacing-4: 10px;
   }
 
   .astryx-code-block-header {
     background-color: #161b22;
     border-bottom-color: #30363d;
     color: #c9d1d9;
+    font-size: 0.75rem;
+    --spacing-2: 4px;
+    --spacing-4: 12px;
   }
 
   .astryx-code-block-title {
@@ -608,6 +624,32 @@
     border-style: solid;
     border-color: light-dark(#c7d2fe, #3b4768);
     color: light-dark(#3730a3, #a5b4fc);
+    border-radius: 4px;
+    padding-block: 1px;
+    padding-inline: 5px;
+    font-size: 0.85em;
+  }
+
+  .astryx-chat-tool-calls {
+    margin-block-start: 0px;
+  }
+
+  .astryx-chat-message-bubble[data-variant="ghost"] {
+    padding-inline: 0px;
+    padding-block: 4px;
+  }
+
+  .astryx-chat-message-metadata {
+    margin-block-start: 2px;
+  }
+
+  .astryx-collapsible-trigger {
+    padding-block: 2px;
+  }
+
+  .astryx-collapsible-content {
+    padding-block-start: 2px;
+    padding-block-end: 4px;
   }
 
   .astryx-text[data-color="primary"] { color: var(--color-text-primary); }

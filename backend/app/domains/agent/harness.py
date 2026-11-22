@@ -38,6 +38,7 @@ from backend.app.domains.agent.run_backends import (
 from backend.app.domains.agent.run_context import RunCatalog, RunContext
 from backend.app.domains.agent.shell_guard import ShellGuard
 from backend.app.domains.agent.subagents import build_subagents
+from backend.app.domains.agent.tools.ask_user import build_ask_user_tool
 from backend.app.domains.artifacts.entities import ArtifactKind
 from backend.app.domains.artifacts.store import ArtifactStore
 from backend.app.shared.config import AppConfig
@@ -135,6 +136,7 @@ class DeepAgentHarness:
 
         graph = create_deep_agent(
             model=model,
+            tools=[build_ask_user_tool()],
             backend=backend,
             permissions=permissions,
             skills=["/skills/"],
@@ -252,6 +254,7 @@ class DeepAgentHarness:
         feedback: str | None,
         creds: LLMCredentials,
         project_id: str | None = None,
+        answers: list[dict[str, object]] | None = None,
     ) -> AsyncIterator[HarnessEvent]:
         graph = self._get_or_build_graph(creds, mode)
         catalog = self._build_catalog(
@@ -264,6 +267,8 @@ class DeepAgentHarness:
         resume_payload: dict[str, Any] = {"decision": decision}
         if feedback:
             resume_payload["feedback"] = feedback
+        if answers:
+            resume_payload["answers"] = answers
         async for ev in self._execute_stream(
             graph,
             catalog,

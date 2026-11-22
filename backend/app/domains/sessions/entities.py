@@ -41,13 +41,32 @@ class ChatMessage(BaseModel):
     created_at: datetime
 
 
+class QuestionOption(BaseModel):
+    label: str
+    description: str | None = None
+    recommended: bool = False
+
+
+class UserQuestionItem(BaseModel):
+    question: str
+    options: list[QuestionOption] = Field(default_factory=list)
+
+
+class QuestionAnswer(BaseModel):
+    question: str
+    selected_option: str | None = None
+    custom_text: str | None = None
+    skipped: bool = False
+
+
 class PendingInterrupt(BaseModel):
-    kind: Literal["plan_review", "shell_approval"]
+    kind: Literal["plan_review", "shell_approval", "user_question"]
     summary: str
     artifact_kind: str | None = None
     command: str | None = None
     workspace: str | None = None
     reason: str | None = None
+    questions: list[UserQuestionItem] = Field(default_factory=list)
 
 
 class Project(BaseModel):

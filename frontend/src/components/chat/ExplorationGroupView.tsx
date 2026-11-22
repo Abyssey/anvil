@@ -28,7 +28,7 @@ export function toChatToolCallItem(tc: ToolCallRecord, index: number): ChatToolC
     node: tc.subagent ?? undefined,
     errorMessage: status === "error" && tc.output ? tc.output.slice(0, 200) : undefined,
     resultDetail: tc.output ? (
-      <CodeBlock code={tc.output} language="plaintext" maxHeight={180} width="100%" />
+      <CodeBlock code={tc.output} language="plaintext" size="sm" maxHeight={160} width="100%" />
     ) : undefined,
   };
 }
@@ -67,7 +67,7 @@ export function ExplorationGroupView({
       }
     >
       {isOpen ? (
-        <VStack gap={0}>
+        <VStack gap={0} paddingInlineStart={3}>
           {group.calls.map((tc, index) => (
             <ChatToolCalls
               key={tc.id || `${tc.name}-${index}`}

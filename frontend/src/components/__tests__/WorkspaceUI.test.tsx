@@ -133,7 +133,7 @@ describe("Abyss Workspace UI (Astryx + HITL)", () => {
     fireEvent.click(screen.getByRole("radio", { name: "Plan" }));
     expect(val.actions.setMode).toHaveBeenCalledWith("plan");
 
-    fireEvent.click(screen.getByRole("button", { name: /qwen3\.8-flash/i }));
+    fireEvent.click(screen.getByRole("button", { name: /LLM Settings/i }));
     expect(val.actions.openSettings).toHaveBeenCalled();
   });
 

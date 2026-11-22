@@ -18,11 +18,13 @@ from backend.app.domains.sessions.entities import (
     PendingInterrupt,
     Project,
     ProjectMemory,
+    QuestionAnswer,
     RunMode,
     Session,
     SessionStatus,
     StreamEvent,
     ToolCallRecord,
+    UserQuestionItem,
 )
 from backend.app.domains.sessions.memory_store import (
     MAX_PROJECT_MEMORY_BYTES,
@@ -39,6 +41,66 @@ from backend.app.shared.llm_credentials import LLMCredentials
 from backend.app.shared.logging import bind_log_context
 
 logger = logging.getLogger(__name__)
+
+_QUESTION_DECISIONS = frozenset({"answer", "skip"})
+_APPROVAL_DECISIONS = frozenset({"approve", "revise", "deny"})
+
+
+def _format_qa_user_message(
+    questions: list[UserQuestionItem],
+    decision: str,
+    answers: list[QuestionAnswer],
+    feedback: str | None,
+) -> str:
+    """Format answered or skipped clarifying questions into a concise timeline user message."""
+    if decision == "skip" and not answers:
+        if len(questions) == 1:
+            return f"Q. {questions[0].question}\nA. (건너뜀 — 추천안으로 진행)"
+        lines = ["질문 건너뜀 (추천안으로 진행)"]
+        for idx, item in enumerate(questions, start=1):
+            lines.append(f"{idx}. {item.question}")
+        return "\n".join(lines)
+
+    entries: list[tuple[str, str]] = []
+    for idx, item in enumerate(questions):
+        ans: QuestionAnswer | None = answers[idx] if idx < len(answers) else None
+        if ans is None:
+            for candidate in answers:
+                if candidate.question.strip() == item.question.strip():
+                    ans = candidate
+                    break
+        if ans is None or ans.skipped:
+            ans_text = "(건너뜀 — 추천안으로 진행)"
+        else:
+            custom = (ans.custom_text or "").strip()
+            selected = (ans.selected_option or "").strip()
+            ans_text = custom or selected or "(건너뜀 — 추천안으로 진행)"
+        entries.append((item.question, ans_text))
+
+    if not entries and answers:
+        for ans in answers:
+            custom = (ans.custom_text or "").strip()
+            selected = (ans.selected_option or "").strip()
+            ans_text = (
+                "(건너뜀 — 추천안으로 진행)"
+                if ans.skipped
+                else (custom or selected or "(건너뜀 — 추천안으로 진행)")
+            )
+            entries.append((ans.question, ans_text))
+
+    if len(entries) == 1:
+        q_text, a_text = entries[0]
+        text = f"Q. {q_text}\nA. {a_text}"
+    else:
+        blocks = [
+            f"{idx}. Q. {q_text}\n   A. {a_text}"
+            for idx, (q_text, a_text) in enumerate(entries, start=1)
+        ]
+        text = "\n".join(blocks)
+
+    if feedback and feedback.strip():
+        text = f"{text}\n\n추가 메모: {feedback.strip()}"
+    return text
 
 
 class SessionService:
@@ -306,6 +368,22 @@ class SessionService:
             ):
                 yield ev
 
+    async def validate_resume(self, session_id: str, decision: str) -> Session:
+        """Pre-flight check before opening the SSE stream so errors return HTTP 4xx."""
+        session = await self._repo.get_session(session_id)
+        pending = session.pending_interrupt
+        if pending is None:
+            raise InvalidInterruptResumeError()
+        if pending.kind == "user_question" and decision not in _QUESTION_DECISIONS:
+            raise InvalidInterruptResumeError(
+                "Question interrupt requires decision 'answer' or 'skip'."
+            )
+        if pending.kind != "user_question" and decision not in _APPROVAL_DECISIONS:
+            raise InvalidInterruptResumeError(
+                f"Interrupt '{pending.kind}' requires decision 'approve', 'revise', or 'deny'."
+            )
+        return session
+
     async def stream_resume(
         self,
         *,
@@ -313,10 +391,29 @@ class SessionService:
         decision: str,
         feedback: str | None,
         creds: LLMCredentials,
+        answers: list[QuestionAnswer] | None = None,
     ) -> AsyncIterator[StreamEvent]:
-        session = await self._repo.get_session(session_id)
-        if session.pending_interrupt is None:
-            raise InvalidInterruptResumeError()
+        session = await self.validate_resume(session_id, decision)
+        pending = session.pending_interrupt
+        assert pending is not None
+
+        answer_list = list(answers or [])
+        if pending.kind == "user_question":
+            qa_summary = _format_qa_user_message(
+                pending.questions,
+                decision,
+                answer_list,
+                feedback,
+            )
+            await self._repo.append_message(
+                ChatMessage(
+                    id=uuid.uuid4().hex[:12],
+                    session_id=session.id,
+                    role="user",
+                    content=qa_summary,
+                    created_at=datetime.now(UTC),
+                )
+            )
 
         session = await self._repo.update_session(
             session.model_copy(
@@ -339,6 +436,7 @@ class SessionService:
                 feedback=feedback,
                 creds=creds,
                 project_id=session.project_id or session.id,
+                answers=[a.model_dump() for a in answer_list] if answer_list else None,
             )
             async for ev in self._consume_and_persist_stream(
                 session,

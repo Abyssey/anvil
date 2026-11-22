@@ -465,8 +465,9 @@ export function SkillsDialog() {
                     </SegmentedControl>
                   </HStack>
 
-                  <HStack gap={2} vAlign="end">
+                  <VStack width="100%">
                     <TextInput
+                      type="search"
                       label="Search skills.sh"
                       isLabelHidden
                       value={searchQuery}
@@ -476,16 +477,18 @@ export function SkillsDialog() {
                       startIcon={<Icon icon={MagnifyingGlassIcon} size="sm" />}
                       hasClear
                     />
-                  </HStack>
+                  </VStack>
 
-                  <HStack gap={2} vAlign="end">
-                    <TextInput
-                      label="Direct GitHub install"
-                      value={directSource}
-                      onChange={setDirectSource}
-                      onEnter={() => void handleDirectInstall()}
-                      placeholder="owner/repo or owner/repo@skill-id"
-                    />
+                  <HStack gap={2} vAlign="end" width="100%">
+                    <VStack width="100%">
+                      <TextInput
+                        label="Direct GitHub install"
+                        value={directSource}
+                        onChange={setDirectSource}
+                        onEnter={() => void handleDirectInstall()}
+                        placeholder="owner/repo or owner/repo@skill-id"
+                      />
+                    </VStack>
                     <Button
                       label="Install"
                       variant="secondary"

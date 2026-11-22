@@ -42,20 +42,24 @@ function renderGroupedToolBlocks(
   if (blocks.length === 0) {
     return null;
   }
-  return blocks.map((block, blockIndex) =>
-    block.kind === "exploration_group" ? (
-      <ExplorationGroupView
-        key={block.id}
-        group={block}
-        isOpen={groupOpenOverrides[block.id] ?? false}
-        onToggle={onToggleGroup}
-      />
-    ) : (
-      <ChatToolCalls
-        key={block.id}
-        calls={[toChatToolCallItem(block.call, blockIndex)]}
-      />
-    ),
+  return (
+    <VStack gap={0.5} width="100%">
+      {blocks.map((block, blockIndex) =>
+        block.kind === "exploration_group" ? (
+          <ExplorationGroupView
+            key={block.id}
+            group={block}
+            isOpen={groupOpenOverrides[block.id] ?? false}
+            onToggle={onToggleGroup}
+          />
+        ) : (
+          <ChatToolCalls
+            key={block.id}
+            calls={[toChatToolCallItem(block.call, blockIndex)]}
+          />
+        ),
+      )}
+    </VStack>
   );
 }
 
@@ -341,7 +345,7 @@ export function MessageStream() {
                 )}
                 {renderGroupedToolBlocks(toolBlocks, groupOpenOverrides, handleToggleGroup)}
                 {msg.content && (
-                  <ChatMessageBubble variant="ghost">
+                  <ChatMessageBubble variant="ghost" width="100%">
                     <Markdown density="compact" plugins={ABYSS_MARKDOWN_PLUGINS}>
                       {msg.content}
                     </Markdown>
@@ -385,7 +389,7 @@ export function MessageStream() {
               )}
               {renderGroupedToolBlocks(streamingToolBlocks, groupOpenOverrides, handleToggleGroup)}
               {state.streamingAssistant.content && (
-                <ChatMessageBubble variant="ghost">
+                <ChatMessageBubble variant="ghost" width="100%">
                   <Markdown
                     density="compact"
                     isStreaming

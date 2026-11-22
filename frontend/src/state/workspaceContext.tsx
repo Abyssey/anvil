@@ -16,10 +16,12 @@ import type {
   InstalledSkill,
   PendingInterrupt,
   Project,
+  QuestionAnswer,
   RunMode,
   Session,
   StreamEvent,
   ToolCallRecord,
+  UserQuestionItem,
   WorkspaceDiff,
   WorkspaceInfo,
 } from "../api/types";
@@ -73,6 +75,8 @@ export interface WorkspaceState {
   treeRevision: number;
 }
 
+export type ResumeDecision = "approve" | "revise" | "deny" | "answer" | "skip";
+
 export interface WorkspaceActions {
   openSettings: () => void;
   closeSettings: () => void;
@@ -100,8 +104,9 @@ export interface WorkspaceActions {
   loadOlderMessages: () => Promise<void>;
   stopStream: () => void;
   resumeInterrupt: (
-    decision: "approve" | "revise" | "deny",
+    decision: ResumeDecision,
     feedback?: string,
+    answers?: QuestionAnswer[],
   ) => Promise<void>;
   openRightDrawer: (tab: RightDrawerTab) => void;
   setActiveArtifactTab: (kind: ArtifactKind) => void;
@@ -144,6 +149,38 @@ function sessionsMatchingProject(
   return list.filter(
     (s) => s.project_id === project.id || (!s.project_id && s.workspace_path === project.path),
   );
+}
+
+function formatOptimisticQaSummary(
+  questions: readonly UserQuestionItem[],
+  decision: ResumeDecision,
+  answers: readonly QuestionAnswer[],
+): string {
+  if (decision === "skip" && answers.length === 0) {
+    if (questions.length === 1) {
+      return `Q. ${questions[0].question}\nA. (건너뜀 — 추천안으로 진행)`;
+    }
+    return [
+      "질문 건너뜀 (추천안으로 진행)",
+      ...questions.map((q, i) => `${i + 1}. ${q.question}`),
+    ].join("\n");
+  }
+
+  const pairs = questions.map((item, idx) => {
+    const ans =
+      answers[idx] ??
+      answers.find((candidate) => candidate.question.trim() === item.question.trim());
+    const text =
+      !ans || ans.skipped
+        ? "(건너뜀 — 추천안으로 진행)"
+        : (ans.custom_text?.trim() || ans.selected_option?.trim() || "(건너뜀 — 추천안으로 진행)");
+    return { q: item.question, a: text };
+  });
+
+  if (pairs.length === 1) {
+    return `Q. ${pairs[0].q}\nA. ${pairs[0].a}`;
+  }
+  return pairs.map((p, idx) => `${idx + 1}. Q. ${p.q}\n   A. ${p.a}`).join("\n");
 }
 
 function projectForSession(projects: Project[], session: Session): Project | undefined {
@@ -914,15 +951,46 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const resumeInterrupt = useCallback(
-    async (decision: "approve" | "revise" | "deny", feedback?: string) => {
+    async (
+      decision: ResumeDecision,
+      feedback?: string,
+      answers?: QuestionAnswer[],
+    ) => {
       if (!activeSession || isStreaming) return;
       if (!isLLMConfigured(settings)) {
         setSettingsOpen(true);
         return;
       }
+      const pending = activeSession.pending_interrupt;
+      if (pending?.kind === "user_question" && (decision === "answer" || decision === "skip")) {
+        const qaSummary = formatOptimisticQaSummary(
+          pending.questions ?? [],
+          decision,
+          answers ?? [],
+        );
+        const optimisticUser: ChatMessage = {
+          id: `local-${Date.now()}`,
+          session_id: activeSession.id,
+          role: "user",
+          content: qaSummary,
+          thinking: "",
+          tool_calls: [],
+          created_at: new Date().toISOString(),
+        };
+        setMessages((prev) => [...prev, optimisticUser]);
+        setActiveSession((prev) =>
+          prev && prev.id === activeSession.id
+            ? { ...prev, status: "running", pending_interrupt: null }
+            : prev,
+        );
+      }
       await runSSEStream(
         `/api/sessions/${encodeURIComponent(activeSession.id)}/resume`,
-        { decision, feedback: feedback ?? null },
+        {
+          decision,
+          feedback: feedback ?? null,
+          ...(answers && answers.length > 0 ? { answers } : {}),
+        },
         activeSession.id,
         activeSession.workspace_path,
       );
