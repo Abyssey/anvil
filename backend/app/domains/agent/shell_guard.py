@@ -1,0 +1,106 @@
+"""Pure-stdlib 2-tier ShellGuard policy and secret scrubbing."""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from enum import StrEnum
+
+
+class ShellAction(StrEnum):
+    ALLOW = "allow"
+    REQUIRE_APPROVAL = "require_approval"
+    BLOCK = "block"
+
+
+@dataclass(frozen=True)
+class ShellVerdict:
+    action: ShellAction
+    reason: str
+
+
+_BLOCK_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"(?:^|[;&|\s])sudo(?:\s|$)"), "Privilege escalation (sudo) is blocked"),
+    (re.compile(r"(?:^|[;&|\s])su(?:\s|$)"), "Privilege escalation (su) is blocked"),
+    (re.compile(r"\brm\s+-[^\s]*[rf][^\s]*\s+(?:/\s*$|/\*|~|\$HOME)"), "Root/home wipe is blocked"),
+    (re.compile(r"\b(?:mkfs|fdisk|parted)\b"), "Filesystem formatting tools are blocked"),
+    (re.compile(r"\bdd\s+if="), "Raw disk write (dd) is blocked"),
+    (re.compile(r":\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:"), "Fork bomb pattern is blocked"),
+    (
+        re.compile(r"\b(?:curl|wget)\b[^|\n]*\|\s*(?:sh|bash|zsh)\b"),
+        "Piping remote scripts to shell is blocked",
+    ),
+    (re.compile(r"(?:^|[\s/])\.env(?:\.local)?(?:\s|$|\"|')"), "Sensitive .env access is blocked"),
+    (re.compile(r"(?:~|/)\.ssh/"), "SSH private key access is blocked"),
+    (re.compile(r"(?:^|\s)/etc/shadow(?:\s|$)"), "Shadow password file access is blocked"),
+    (re.compile(r"\.\./\.\./"), "Parent directory escape traversal is blocked"),
+)
+
+_DESTRUCTIVE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"(?:^|[;&|\s])rm(?:\s|$)"), "File deletion requires approval"),
+    (re.compile(r"(?:^|[;&|\s])mv(?:\s|$)"), "File move/rename requires approval"),
+    (re.compile(r"(?:^|[;&|\s])(?:chmod|chown)(?:\s|$)"), "Permission change requires approval"),
+    (
+        re.compile(r"\bgit\s+(?:push|reset|clean|rebase|force-push)\b"),
+        "Mutating git remote/history command requires approval",
+    ),
+    (
+        re.compile(r"\bgit\s+checkout\s+--(?:\s|$)"),
+        "Discarding working tree changes requires approval",
+    ),
+    (
+        re.compile(r"(?:^|[;&|\s])(?:kill|pkill|killall)(?:\s|$)"),
+        "Process termination requires approval",
+    ),
+    (re.compile(r"\bnpm\s+(?:i|install)\s+-g\b"), "Global package install requires approval"),
+    (re.compile(r"\bpip\s+install\s+--user\b"), "User-wide pip install requires approval"),
+)
+
+_SECRET_OUTPUT_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(Bearer\s+)[A-Za-z0-9._\-]{6,}", re.IGNORECASE),
+    re.compile(r"\bsk-[A-Za-z0-9_\-]{8,}\b"),
+    re.compile(r"\bAIza[A-Za-z0-9_\-]{8,}\b"),
+    re.compile(r"\bghp_[A-Za-z0-9]{8,}\b"),
+)
+
+
+class ShellGuard:
+    """Evaluates shell commands against hard deny rules and mode-based HITL policies."""
+
+    def evaluate(self, command: str, mode: str) -> ShellVerdict:
+        normalized = command.strip()
+        if not normalized:
+            return ShellVerdict(ShellAction.BLOCK, "Empty command is not allowed")
+
+        if mode == "ask":
+            return ShellVerdict(
+                ShellAction.BLOCK,
+                "Shell execution is disabled in Ask mode.",
+            )
+
+        for pattern, reason in _BLOCK_PATTERNS:
+            if pattern.search(normalized):
+                return ShellVerdict(ShellAction.BLOCK, reason)
+
+        if mode == "plan":
+            return ShellVerdict(
+                ShellAction.REQUIRE_APPROVAL,
+                "Plan mode requires explicit approval before running shell commands.",
+            )
+
+        for pattern, reason in _DESTRUCTIVE_PATTERNS:
+            if pattern.search(normalized):
+                return ShellVerdict(ShellAction.REQUIRE_APPROVAL, reason)
+
+        return ShellVerdict(ShellAction.ALLOW, "Safe command allowed in Auto mode.")
+
+    def scrub_output(self, text: str, extra_secrets: tuple[str, ...] = ()) -> str:
+        """Mask known API key/token patterns and request-scoped secrets from shell output."""
+        cleaned = text
+        for secret in extra_secrets:
+            if len(secret) >= 6:
+                cleaned = cleaned.replace(secret, "[REDACTED]")
+        cleaned = _SECRET_OUTPUT_PATTERNS[0].sub(r"\1[REDACTED]", cleaned)
+        for pattern in _SECRET_OUTPUT_PATTERNS[1:]:
+            cleaned = pattern.sub("[REDACTED]", cleaned)
+        return cleaned
