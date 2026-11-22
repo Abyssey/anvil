@@ -63,6 +63,7 @@ def test_pure_stdlib_domain_modules() -> None:
 def test_pure_domain_entities_stdlib_and_pydantic_only() -> None:
     _assert_stdlib_or_pydantic(BACKEND_APP / "domains" / "sessions" / "entities.py")
     _assert_stdlib_or_pydantic(BACKEND_APP / "domains" / "artifacts" / "entities.py")
+    _assert_stdlib_or_pydantic(BACKEND_APP / "domains" / "skills" / "entities.py")
 
 
 def test_agent_middleware_isolation() -> None:
@@ -104,6 +105,27 @@ def test_artifacts_domain_isolation() -> None:
             continue
         bad = sorted(m for m in _extract_imports(py_file) if _has_prefix(m, forbidden))
         assert not bad, f"{py_file} violates artifacts domain isolation: {bad}"
+
+
+def test_skills_domain_isolation() -> None:
+    skills_dir = BACKEND_APP / "domains" / "skills"
+    if not skills_dir.exists():
+        return
+    forbidden = (
+        "backend.app.domains.sessions",
+        "domains.sessions",
+        "backend.app.domains.agent",
+        "domains.agent",
+        "backend.app.domains.artifacts",
+        "domains.artifacts",
+        "fastapi",
+        "starlette",
+    )
+    for py_file in skills_dir.rglob("*.py"):
+        if py_file.name == "router.py":
+            continue
+        bad = sorted(m for m in _extract_imports(py_file) if _has_prefix(m, forbidden))
+        assert not bad, f"{py_file} violates skills domain isolation: {bad}"
 
 
 def test_routers_are_thin_http_adapters() -> None:
