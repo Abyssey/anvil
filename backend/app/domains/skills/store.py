@@ -361,13 +361,24 @@ class SkillStore:
             source_label = "global"
 
         pkg = await self._registry.fetch_skill_archive(req.source, req.skill_id)
-        return await asyncio.to_thread(
+        installed = await asyncio.to_thread(
             _write_package_atomically,
             target_root,
             pkg,
             scope=req.scope,
             source_label=source_label,
         )
+        logger.info(
+            "skills.installed",
+            extra={
+                "event": "skills.installed",
+                "skill_name": installed.name,
+                "scope": installed.scope,
+                "source": pkg.source,
+                "skill_id": pkg.skill_id,
+            },
+        )
+        return installed
 
     async def delete(
         self,
@@ -410,3 +421,11 @@ class SkillStore:
                 code="SKILL_NOT_FOUND",
             )
         await asyncio.to_thread(shutil.rmtree, resolved)
+        logger.info(
+            "skills.deleted",
+            extra={
+                "event": "skills.deleted",
+                "skill_name": safe_name,
+                "scope": scope,
+            },
+        )

@@ -16,6 +16,7 @@ from backend.app.domains.agent.workspace import (
 from backend.app.shared.dependencies import (
     AppConfigDep,
     LLMCredentialsDep,
+    ModelFactoryDep,
     WorkspaceInspectorDep,
 )
 
@@ -76,6 +77,6 @@ async def get_workspace_diff(
 @router.post("/llm-ping")
 async def ping_llm_endpoint(
     creds: LLMCredentialsDep,
-    inspector: WorkspaceInspectorDep,
+    model_factory: ModelFactoryDep,
 ) -> dict[str, object]:
-    return await inspector.ping_llm(creds)
+    return await model_factory.ping_llm(creds)

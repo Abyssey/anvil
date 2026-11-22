@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Query, status
 
 from backend.app.domains.skills.entities import (
     CatalogTab,
@@ -16,24 +16,9 @@ from backend.app.domains.skills.entities import (
     SkillPreview,
     SkillScope,
 )
-from backend.app.domains.skills.store import SkillStore
+from backend.app.shared.dependencies import SkillStoreDep
 
 router = APIRouter(prefix="/api/skills", tags=["skills"])
-
-
-def get_skill_store(request: Request) -> SkillStore:
-    """Resolve the application-scoped SkillStore from FastAPI app.state."""
-    direct = getattr(request.app.state, "skill_store", None)
-    if isinstance(direct, SkillStore):
-        return direct
-    container = getattr(request.app.state, "container", None)
-    nested = getattr(container, "skill_store", None) if container is not None else None
-    if isinstance(nested, SkillStore):
-        return nested
-    raise RuntimeError("SkillStore is not initialized on app.state.")
-
-
-SkillStoreDep = Annotated[SkillStore, Depends(get_skill_store)]
 
 
 @router.get("/installed")

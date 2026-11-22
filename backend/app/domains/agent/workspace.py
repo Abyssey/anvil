@@ -1,17 +1,16 @@
-"""WorkspaceInspector: directory tree, confined file preview, git diff hunks, and LLM ping."""
+"""WorkspaceInspector: directory tree, confined file preview, and git diff hunks."""
 
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
 
-import httpx
 from pydantic import BaseModel, Field
 
+from backend.app.domains.agent.git_utils import run_git
 from backend.app.domains.artifacts.entities import DiffHunk, FileDiff
 from backend.app.domains.artifacts.walkthrough_diff import parse_unified_diff
-from backend.app.shared.errors import InvalidWorkspaceError, LLMUpstreamError, PathEscapeError
-from backend.app.shared.llm_credentials import LLMCredentials
+from backend.app.shared.errors import InvalidWorkspaceError, PathEscapeError
 
 _IGNORED_NAMES = frozenset(
     {".git", "node_modules", ".venv", "__pycache__", "dist", ".abyss-data", ".pytest_cache"}
@@ -66,14 +65,11 @@ class DirectoryBrowseResponse(BaseModel):
 class WorkspaceInspector:
     """Inspects local repositories safely within canonical workspace boundaries."""
 
-    def __init__(self, *, http_transport: httpx.AsyncBaseTransport | None = None) -> None:
-        self._http_transport = http_transport
-
     async def validate_workspace(self, workspace_path: str) -> WorkspaceInfo:
         root = self._resolve_root(workspace_path)
-        branch = await self._git_output(root, "rev-parse", "--abbrev-ref", "HEAD")
+        branch = await run_git(root, "rev-parse", "--abbrev-ref", "HEAD")
         is_git = (root / ".git").exists() or bool(
-            await self._git_output(root, "rev-parse", "--is-inside-work-tree")
+            await run_git(root, "rev-parse", "--is-inside-work-tree")
         )
         return WorkspaceInfo(
             path=str(root),
@@ -165,16 +161,16 @@ class WorkspaceInspector:
     async def get_diff(self, workspace_path: str) -> WorkspaceDiffResponse:
         root = self._resolve_root(workspace_path)
         is_git = (root / ".git").exists() or bool(
-            await self._git_output(root, "rev-parse", "--is-inside-work-tree")
+            await run_git(root, "rev-parse", "--is-inside-work-tree")
         )
         if not is_git:
             return WorkspaceDiffResponse(workspace_path=str(root))
 
-        branch = await self._git_output(root, "rev-parse", "--abbrev-ref", "HEAD")
-        git_head = await self._git_output(root, "rev-parse", "HEAD")
-        raw_diff = await self._git_output(root, "diff", "--no-color", "HEAD")
+        branch = await run_git(root, "rev-parse", "--abbrev-ref", "HEAD")
+        git_head = await run_git(root, "rev-parse", "HEAD")
+        raw_diff = await run_git(root, "diff", "--no-color", "HEAD")
         if not raw_diff:
-            raw_diff = await self._git_output(root, "diff", "--no-color")
+            raw_diff = await run_git(root, "diff", "--no-color")
 
         parsed_files = parse_unified_diff(raw_diff)
         files: list[FileDiff] = [
@@ -199,7 +195,7 @@ class WorkspaceInspector:
         ]
 
         seen_paths = {f.path for f in files}
-        status_raw = await self._git_output(root, "status", "--porcelain", "-uall")
+        status_raw = await run_git(root, "status", "--porcelain", "-uall")
         for line in status_raw.splitlines():
             if not line.startswith("?? "):
                 continue
@@ -233,42 +229,6 @@ class WorkspaceInspector:
             git_head=git_head,
             files=files,
         )
-
-    async def ping_llm(self, creds: LLMCredentials) -> dict[str, object]:
-        """Verify OpenAI-compatible endpoint reachability without logging credentials."""
-        models_url = f"{creds.base_url}/models"
-        headers = {"Authorization": f"Bearer {creds.api_key}"}
-        try:
-            async with httpx.AsyncClient(
-                transport=self._http_transport,
-                trust_env=False,
-                timeout=10.0,
-            ) as client:
-                resp = await client.get(models_url, headers=headers)
-                if resp.status_code in {404, 405}:
-                    resp = await client.post(
-                        f"{creds.base_url}/chat/completions",
-                        headers=headers,
-                        json={
-                            "model": creds.model,
-                            "messages": [{"role": "user", "content": "ping"}],
-                            "max_tokens": 1,
-                        },
-                    )
-        except httpx.HTTPError as exc:
-            msg = creds.redact_secrets(
-                f"Failed to connect to {creds.base_url}: {type(exc).__name__}"
-            )
-            raise LLMUpstreamError(msg) from exc
-
-        if resp.status_code >= 400:
-            snippet = creds.redact_secrets(resp.text[:240].strip())
-            detail_suffix = f": {snippet}" if snippet else ""
-            raise LLMUpstreamError(
-                f"LLM endpoint returned HTTP {resp.status_code}{detail_suffix}",
-                details={"status_code": resp.status_code},
-            )
-        return {"ok": True, "base_url": creds.base_url, "model": creds.model}
 
     @staticmethod
     def _resolve_root(workspace_path: str) -> Path:
@@ -323,17 +283,3 @@ class WorkspaceInspector:
                 )
             )
         return nodes
-
-    @staticmethod
-    async def _git_output(cwd: Path, *args: str) -> str:
-        proc = await asyncio.create_subprocess_exec(
-            "git",
-            *args,
-            cwd=str(cwd),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _ = await proc.communicate()
-        if proc.returncode != 0:
-            return ""
-        return stdout.decode("utf-8", errors="replace").strip()

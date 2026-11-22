@@ -28,7 +28,8 @@ class AppConfig:
     ) -> AppConfig:
         resolved_data = data_dir.resolve()
         repo_root = Path(__file__).resolve().parents[3]
-        skills_dir = bundled_skills_dir or (repo_root / "backend" / "bundled_skills")
+        default_bundled = Path(__file__).resolve().parents[1] / "domains" / "skills" / "builtin"
+        skills_dir = bundled_skills_dir or default_bundled
         dist_dir = frontend_dist_dir or (repo_root / "frontend" / "dist")
         return cls(
             data_dir=resolved_data,
@@ -45,7 +46,6 @@ class AppConfig:
         return cls.for_data_dir(
             root / ".abyss-data",
             default_workspace_path=root,
-            bundled_skills_dir=root / "backend" / "bundled_skills",
             frontend_dist_dir=root / "frontend" / "dist",
         )
 

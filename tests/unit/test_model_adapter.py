@@ -174,3 +174,56 @@ async def test_reasoning_chat_openai_falls_back_when_provider_rejects_enable_thi
     assert "enable_thinking" in calls[2]
     assert "enable_thinking" not in calls[3]
     assert stream_model.extra_body is None
+
+
+async def test_model_factory_ping_llm_falls_back_and_redacts_api_key() -> None:
+    import httpx
+    import pytest
+
+    from backend.app.shared.errors import LLMUpstreamError
+
+    seen_paths: list[tuple[str, str]] = []
+
+    def fallback_handler(request: httpx.Request) -> httpx.Response:
+        seen_paths.append((request.method, request.url.path))
+        if request.url.path.endswith("/models"):
+            return httpx.Response(404, json={"error": {"message": "models endpoint disabled"}})
+        if request.url.path.endswith("/chat/completions"):
+            return httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-ping",
+                    "object": "chat.completion",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "ok"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                },
+            )
+        return httpx.Response(500)
+
+    creds = LLMCredentials(
+        base_url="http://localhost:8001/v1",
+        model="qwen3.8-flash",
+        api_key="sk-ultra-secret-999",
+    )
+    factory = ModelFactory(http_transport=httpx.MockTransport(fallback_handler))
+    res = await factory.ping_llm(creds)
+    assert res == {"ok": True, "base_url": "http://localhost:8001/v1", "model": "qwen3.8-flash"}
+    assert seen_paths == [("GET", "/v1/models"), ("POST", "/v1/chat/completions")]
+
+    def auth_error_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401,
+            json={"error": {"message": "Invalid bearer token sk-ultra-secret-999"}},
+        )
+
+    err_factory = ModelFactory(http_transport=httpx.MockTransport(auth_error_handler))
+    with pytest.raises(LLMUpstreamError) as exc_info:
+        await err_factory.ping_llm(creds)
+    assert "401" in exc_info.value.message
+    assert "sk-ultra-secret-999" not in exc_info.value.message
+    assert "[REDACTED]" in exc_info.value.message

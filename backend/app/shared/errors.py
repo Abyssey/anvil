@@ -1,9 +1,7 @@
-"""Domain error hierarchy and centralized FastAPI HTTP serialization."""
+"""Pure domain error hierarchy and structured error payloads (FastAPI-free)."""
 
 from __future__ import annotations
 
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 
@@ -115,11 +113,3 @@ class InvalidInterruptResumeError(DomainError):
 
     def __init__(self, reason: str = "No pending approval interrupt for this session") -> None:
         super().__init__(reason)
-
-
-def register_exception_handlers(app: FastAPI) -> None:
-    """Register centralized handlers converting DomainError into ErrorResponse."""
-
-    @app.exception_handler(DomainError)
-    async def _handle_domain_error(_request: Request, exc: DomainError) -> JSONResponse:
-        return JSONResponse(status_code=exc.status_code, content=exc.to_payload())

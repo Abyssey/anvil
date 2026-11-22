@@ -423,6 +423,8 @@ async def test_stream_cancellation_recovers_session_status_and_saves_partial_mes
             mode: str,
             user_message: str,
             creds: LLMCredentials,
+            project_id: str | None = None,
+            pinned_skills: list[str] | None = None,
         ) -> AsyncIterator[HarnessEvent]:
             yield HarnessEvent("thinking", {"text": "Inspecting tree..."})
             yield HarnessEvent(

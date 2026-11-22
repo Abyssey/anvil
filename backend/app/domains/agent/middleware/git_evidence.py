@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -15,6 +14,7 @@ from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.runtime import Runtime
 from langgraph.types import Command
 
+from backend.app.domains.agent.git_utils import run_git
 from backend.app.domains.agent.run_context import RunContext
 
 _MUTATING_TOOLS = frozenset({"write_file", "edit_file", "delete", "execute"})
@@ -75,28 +75,15 @@ class GitEvidenceTracker:
 
     async def _probe_git(self) -> GitSnapshot:
         if not (self.workspace_path / ".git").exists():
-            is_inside = await self._run_git("rev-parse", "--is-inside-work-tree")
+            is_inside = await run_git(self.workspace_path, "rev-parse", "--is-inside-work-tree")
             if is_inside != "true":
                 return GitSnapshot(is_git_repo=False)
 
-        branch = await self._run_git("rev-parse", "--abbrev-ref", "HEAD")
-        head = await self._run_git("rev-parse", "HEAD")
-        status_raw = await self._run_git("status", "--porcelain")
+        branch = await run_git(self.workspace_path, "rev-parse", "--abbrev-ref", "HEAD")
+        head = await run_git(self.workspace_path, "rev-parse", "HEAD")
+        status_raw = await run_git(self.workspace_path, "status", "--porcelain")
         entries = tuple(line for line in status_raw.splitlines() if line.strip())
         return GitSnapshot(is_git_repo=True, branch=branch, head=head, dirty_entries=entries)
-
-    async def _run_git(self, *args: str) -> str:
-        proc = await asyncio.create_subprocess_exec(
-            "git",
-            *args,
-            cwd=str(self.workspace_path),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _ = await proc.communicate()
-        if proc.returncode != 0:
-            return ""
-        return stdout.decode("utf-8", errors="replace").strip()
 
 
 class GitEvidenceMiddleware(AgentMiddleware):

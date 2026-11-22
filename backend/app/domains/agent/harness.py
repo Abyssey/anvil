@@ -17,10 +17,6 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 
-from backend.app.domains.agent.backend_factory import (
-    DynamicGuardedShellBackend,
-    DynamicRunBackend,
-)
 from backend.app.domains.agent.middleware.git_evidence import (
     GitEvidenceMiddleware,
     GitEvidenceTracker,
@@ -33,16 +29,16 @@ from backend.app.domains.agent.middleware.model_retries import ModelRetryMiddlew
 from backend.app.domains.agent.middleware.run_prompt import RunPromptMiddleware
 from backend.app.domains.agent.middleware.subdir_agents import SubdirAgentsReadMiddleware
 from backend.app.domains.agent.middleware.tool_errors import ToolErrorMiddleware
+from backend.app.domains.agent.middleware.workflow import ArtifactWorkflowMiddleware
 from backend.app.domains.agent.model_adapter import ModelFactory
+from backend.app.domains.agent.run_backends import (
+    DynamicGuardedShellBackend,
+    DynamicRunBackend,
+)
 from backend.app.domains.agent.run_context import RunCatalog, RunContext
 from backend.app.domains.agent.shell_guard import ShellGuard
-from backend.app.domains.agent.skills import SkillFiles
 from backend.app.domains.agent.subagents import build_subagents
 from backend.app.domains.artifacts.entities import ArtifactKind
-from backend.app.domains.artifacts.middleware import (
-    ArtifactRunInfo,
-    ArtifactWorkflowMiddleware,
-)
 from backend.app.domains.artifacts.store import ArtifactStore
 from backend.app.shared.config import AppConfig
 from backend.app.shared.errors import PathEscapeError
@@ -84,20 +80,12 @@ class DeepAgentHarness:
         self._checkpointer = checkpointer
         self._global_skills_dir = (global_skills_dir or config.skills_root).resolve()
         self._memories_root = (memories_root or config.memories_root).resolve()
-        self._skill_files_accepts_global = (
-            "global_skills_dir" in inspect.signature(SkillFiles.__init__).parameters
-        )
         self._max_cached_graphs = max_cached_graphs
         self._graphs: OrderedDict[tuple[str, str], CompiledStateGraph[Any, Any, Any, Any]] = (
             OrderedDict()
         )
         self._subdir_agents_by_key: dict[tuple[str, str], SubdirAgentsReadMiddleware] = {}
         self._shell_guard = ShellGuard()
-
-    def set_checkpointer(self, checkpointer: BaseCheckpointSaver[Any] | None) -> None:
-        self._checkpointer = checkpointer
-        self._graphs.clear()
-        self._subdir_agents_by_key.clear()
 
     async def delete_thread(self, session_id: str) -> None:
         """Delete LangGraph checkpoints and in-memory session middleware caches for a session."""
@@ -143,11 +131,7 @@ class DeepAgentHarness:
             backend=backend,
             sources=list(PROJECT_MEMORY_SOURCES),
         )
-        artifact_mw = ArtifactWorkflowMiddleware(
-            artifact_store=self._artifact_store,
-            get_run_info=self._current_artifact_info,
-            evaluate_shell=self._evaluate_shell,
-        )
+        artifact_mw = ArtifactWorkflowMiddleware(artifact_store=self._artifact_store)
 
         graph = create_deep_agent(
             model=model,
@@ -173,25 +157,18 @@ class DeepAgentHarness:
         while len(self._graphs) > self._max_cached_graphs:
             evicted_key, _ = self._graphs.popitem(last=False)
             self._subdir_agents_by_key.pop(evicted_key, None)
-        return graph
 
-    @staticmethod
-    def _current_artifact_info() -> ArtifactRunInfo | None:
-        catalog = RunContext.current_or_none()
-        if catalog is None:
-            return None
-        return ArtifactRunInfo(
-            session_id=catalog.session_id,
-            workspace_path=catalog.workspace_path,
-            mode=catalog.mode,
-            artifacts_dir=catalog.artifacts_dir,
+        logger.info(
+            "agent.graph_built",
+            extra={
+                "event": "agent.graph_built",
+                "model": creds.model,
+                "base_url": creds.base_url,
+                "mode": mode,
+                "cache_fingerprint": creds.cache_fingerprint(),
+            },
         )
-
-    def _evaluate_shell(self, command: str, mode: str) -> tuple[str, str]:
-        catalog = RunContext.current_or_none()
-        guard = catalog.shell_guard if catalog is not None else self._shell_guard
-        verdict = guard.evaluate(command, mode)
-        return verdict.action.value, verdict.reason
+        return graph
 
     def _project_memory_dir(self, project_id: str | None) -> Path | None:
         if not project_id or not project_id.strip():
@@ -220,7 +197,6 @@ class DeepAgentHarness:
     ) -> RunCatalog:
         artifacts_dir = self._artifact_store.session_dir(session_id)
         tracker = GitEvidenceTracker(workspace_path=workspace_path)
-        extra_skills = () if self._skill_files_accepts_global else (self._global_skills_dir,)
         return RunCatalog(
             session_id=session_id,
             project_id=project_id or "",
@@ -230,7 +206,7 @@ class DeepAgentHarness:
             project_memory_dir=self._project_memory_dir(project_id),
             shell_guard=self._shell_guard,
             secret_values=(creds.api_key,),
-            extra_skills_dirs=extra_skills,
+            extra_skills_dirs=(),
             git_tracker=tracker,
         )
 
@@ -341,7 +317,16 @@ class DeepAgentHarness:
 
             except Exception as exc:
                 safe_msg = creds.redact_secrets(str(exc))
-                logger.warning("Agent stream failed (%s): %s", type(exc).__name__, safe_msg)
+                logger.exception(
+                    "agent.stream_failed",
+                    extra={
+                        "event": "agent.stream_failed",
+                        "error_type": type(exc).__name__,
+                        "model": creds.model,
+                        "base_url": creds.base_url,
+                        "mode": catalog.mode,
+                    },
+                )
                 yield HarnessEvent(
                     event="error",
                     data={"code": "AGENT_EXECUTION_ERROR", "message": safe_msg},

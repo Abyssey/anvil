@@ -22,20 +22,6 @@ class ArtifactDoc(BaseModel):
     updated_at: datetime
 
 
-class InterruptKind(StrEnum):
-    PLAN_REVIEW = "plan_review"
-    SHELL_APPROVAL = "shell_approval"
-
-
-class InterruptPayload(BaseModel):
-    kind: InterruptKind
-    summary: str
-    artifact_kind: ArtifactKind | None = None
-    command: str | None = None
-    workspace: str | None = None
-    reason: str | None = None
-
-
 class DiffHunk(BaseModel):
     path: str
     name: str

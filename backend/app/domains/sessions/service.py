@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
+import logging
+import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
@@ -12,7 +13,6 @@ from pathlib import Path
 from backend.app.domains.agent.harness import DeepAgentHarness, HarnessEvent
 from backend.app.domains.agent.workspace import WorkspaceInspector
 from backend.app.domains.artifacts.store import ArtifactStore
-from backend.app.domains.artifacts.walkthrough_diff import ParsedFileDiff, ParsedHunk
 from backend.app.domains.sessions.entities import (
     ChatMessage,
     PendingInterrupt,
@@ -36,6 +36,9 @@ from backend.app.shared.errors import (
     InvalidWorkspaceError,
 )
 from backend.app.shared.llm_credentials import LLMCredentials
+from backend.app.shared.logging import bind_log_context
+
+logger = logging.getLogger(__name__)
 
 
 class SessionService:
@@ -137,7 +140,16 @@ class SessionService:
             return proj.model_copy(
                 update={"name": info.name, "is_git_repo": info.is_git_repo, "branch": info.branch}
             )
-        except InvalidWorkspaceError:
+        except InvalidWorkspaceError as exc:
+            logger.warning(
+                "project.workspace_invalid",
+                extra={
+                    "event": "project.workspace_invalid",
+                    "project_id": proj.id,
+                    "workspace_path": proj.path,
+                    "detail": exc.message,
+                },
+            )
             return proj
 
     async def list_sessions(self) -> list[Session]:
@@ -273,23 +285,26 @@ class SessionService:
             )
         )
 
-        run_kwargs: dict[str, object] = {}
-        run_params = inspect.signature(self._harness.stream_run).parameters
-        if "project_id" in run_params:
-            run_kwargs["project_id"] = session.project_id or session.id
-        if "pinned_skills" in run_params:
-            run_kwargs["pinned_skills"] = pinned_skills
-
-        raw_stream = self._harness.stream_run(
+        with bind_log_context(
             session_id=session.id,
-            workspace_path=Path(session.workspace_path),
             mode=active_mode.value,
-            user_message=content,
-            creds=creds,
-            **run_kwargs,  # type: ignore[arg-type]
-        )
-        async for ev in self._consume_and_persist_stream(session, raw_stream):
-            yield ev
+            secrets=(creds.api_key,),
+        ):
+            raw_stream = self._harness.stream_run(
+                session_id=session.id,
+                workspace_path=Path(session.workspace_path),
+                mode=active_mode.value,
+                user_message=content,
+                creds=creds,
+                project_id=session.project_id or session.id,
+                pinned_skills=pinned_skills,
+            )
+            async for ev in self._consume_and_persist_stream(
+                session,
+                raw_stream,
+                model=creds.model,
+            ):
+                yield ev
 
     async def stream_resume(
         self,
@@ -311,27 +326,33 @@ class SessionService:
                 }
             )
         )
-        resume_kwargs: dict[str, object] = {}
-        resume_params = inspect.signature(self._harness.stream_resume).parameters
-        if "project_id" in resume_params:
-            resume_kwargs["project_id"] = session.project_id or session.id
-
-        raw_stream = self._harness.stream_resume(
+        with bind_log_context(
             session_id=session.id,
-            workspace_path=Path(session.workspace_path),
             mode=session.mode.value,
-            decision=decision,
-            feedback=feedback,
-            creds=creds,
-            **resume_kwargs,  # type: ignore[arg-type]
-        )
-        async for ev in self._consume_and_persist_stream(session, raw_stream):
-            yield ev
+            secrets=(creds.api_key,),
+        ):
+            raw_stream = self._harness.stream_resume(
+                session_id=session.id,
+                workspace_path=Path(session.workspace_path),
+                mode=session.mode.value,
+                decision=decision,
+                feedback=feedback,
+                creds=creds,
+                project_id=session.project_id or session.id,
+            )
+            async for ev in self._consume_and_persist_stream(
+                session,
+                raw_stream,
+                model=creds.model,
+            ):
+                yield ev
 
     async def _consume_and_persist_stream(
         self,
         session: Session,
         raw_stream: AsyncIterator[HarnessEvent],
+        *,
+        model: str = "",
     ) -> AsyncIterator[StreamEvent]:
         thinking_parts: list[str] = []
         token_parts: list[str] = []
@@ -340,6 +361,12 @@ class SessionService:
         pending_interrupt: PendingInterrupt | None = None
         had_error = False
         was_cancelled = False
+        start = time.perf_counter()
+
+        logger.info(
+            "sse.start",
+            extra={"event": "sse.start", "model": model},
+        )
 
         try:
             async for h_event in raw_stream:
@@ -375,20 +402,51 @@ class SessionService:
                         )
                 elif h_event.event == "interrupt":
                     pending_interrupt = PendingInterrupt.model_validate(h_event.data)
+                    logger.info(
+                        "sse.interrupt",
+                        extra={
+                            "event": "sse.interrupt",
+                            "kind": pending_interrupt.kind,
+                        },
+                    )
                 elif h_event.event == "diff_changed":
                     await self._refresh_walkthrough_plan(session.id, session.workspace_path)
                 elif h_event.event == "error":
                     had_error = True
+                    logger.warning(
+                        "sse.error",
+                        extra={
+                            "event": "sse.error",
+                            "error_code": str(h_event.data.get("code") or "AGENT_ERROR"),
+                        },
+                    )
 
                 yield StreamEvent(event=h_event.event, data=dict(h_event.data))
         except (asyncio.CancelledError, GeneratorExit):
             was_cancelled = True
+            logger.info(
+                "sse.cancelled",
+                extra={
+                    "event": "sse.cancelled",
+                    "duration_ms": round((time.perf_counter() - start) * 1000.0, 2),
+                    "tool_count": len(tool_order),
+                },
+            )
             raise
         except Exception:
             had_error = True
+            logger.error(
+                "sse.error",
+                exc_info=True,
+                extra={
+                    "event": "sse.error",
+                    "duration_ms": round((time.perf_counter() - start) * 1000.0, 2),
+                    "tool_count": len(tool_order),
+                },
+            )
             raise
         finally:
-            await asyncio.shield(
+            next_status = await asyncio.shield(
                 self._finalize_stream(
                     session=session,
                     thinking_parts=thinking_parts,
@@ -399,6 +457,15 @@ class SessionService:
                     had_error=had_error,
                     was_cancelled=was_cancelled,
                 )
+            )
+            logger.info(
+                "sse.complete",
+                extra={
+                    "event": "sse.complete",
+                    "duration_ms": round((time.perf_counter() - start) * 1000.0, 2),
+                    "status": next_status.value,
+                    "tool_count": len(tool_order),
+                },
             )
 
     async def _finalize_stream(
@@ -412,7 +479,7 @@ class SessionService:
         pending_interrupt: PendingInterrupt | None,
         had_error: bool,
         was_cancelled: bool,
-    ) -> None:
+    ) -> SessionStatus:
         content_text = "".join(token_parts).strip()
         thinking_text = "".join(thinking_parts).strip()
         terminal_tool_status = (
@@ -450,33 +517,14 @@ class SessionService:
                 }
             )
         )
+        return next_status
 
     async def _refresh_walkthrough_plan(self, session_id: str, workspace_path: str) -> None:
         diff_resp = await self._workspace_inspector.get_diff(workspace_path)
-        parsed = [
-            ParsedFileDiff(
-                path=f.path,
-                status=f.status,
-                hunks=[
-                    ParsedHunk(
-                        path=h.path,
-                        name=h.name,
-                        old_start=h.old_start,
-                        old_count=h.old_count,
-                        new_start=h.new_start,
-                        new_count=h.new_count,
-                        header=h.header,
-                        lines=tuple(h.lines),
-                    )
-                    for h in f.hunks
-                ],
-            )
-            for f in diff_resp.files
-        ]
-        if parsed:
+        if diff_resp.files:
             self._artifact_store.build_and_save_walkthrough_plan(
                 session_id,
-                parsed,
+                diff_resp.files,
                 git_head=diff_resp.git_head,
             )
         else:

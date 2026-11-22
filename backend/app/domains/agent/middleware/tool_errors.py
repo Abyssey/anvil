@@ -31,7 +31,15 @@ class ToolErrorMiddleware(AgentMiddleware):
         except Exception as exc:
             tool_name = str(request.tool_call.get("name") or "unknown")
             tool_call_id = str(request.tool_call.get("id") or "")
-            logger.warning("Tool %s failed with %s", tool_name, type(exc).__name__)
+            logger.warning(
+                "agent.tool_error",
+                extra={
+                    "event": "agent.tool_error",
+                    "tool": tool_name,
+                    "error_type": type(exc).__name__,
+                    "detail": str(exc)[:300],
+                },
+            )
             payload = json.dumps(
                 {
                     "error_type": type(exc).__name__,
