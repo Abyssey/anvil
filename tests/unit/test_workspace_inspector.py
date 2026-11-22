@@ -136,3 +136,27 @@ async def test_ping_llm_falls_back_when_models_route_missing_and_redacts_api_key
     assert "401" in exc_info.value.message
     assert "sk-ultra-secret-999" not in exc_info.value.message
     assert "[REDACTED]" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_browse_directories_lists_subdirs_skips_hidden_and_detects_git(
+    tmp_path: Path,
+) -> None:
+    repo_a = tmp_path / "repo_a"
+    repo_a.mkdir()
+    _init_git_repo(repo_a)
+    (tmp_path / "plain_dir").mkdir()
+    (tmp_path / ".hidden_dir").mkdir()
+    (tmp_path / "node_modules").mkdir()
+    (tmp_path / "notes.txt").write_text("hi", encoding="utf-8")
+
+    inspector = WorkspaceInspector()
+    result = await inspector.browse_directories(str(tmp_path))
+
+    assert result.current_path == str(tmp_path.resolve())
+    assert result.parent_path == str(tmp_path.resolve().parent)
+    names = [d.name for d in result.directories]
+    assert names == ["plain_dir", "repo_a"]
+    by_name = {d.name: d for d in result.directories}
+    assert by_name["repo_a"].is_git_repo is True
+    assert by_name["plain_dir"].is_git_repo is False

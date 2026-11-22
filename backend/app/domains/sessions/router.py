@@ -9,13 +9,19 @@ from fastapi import APIRouter, status
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, Field
 
-from backend.app.domains.sessions.entities import ChatMessage, RunMode, Session
+from backend.app.domains.sessions.entities import ChatMessage, Project, RunMode, Session
 from backend.app.shared.dependencies import LLMCredentialsDep, SessionServiceDep
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
+projects_router = APIRouter(prefix="/api/projects", tags=["projects"])
+
+
+class CreateProjectRequest(BaseModel):
+    path: str = Field(min_length=1)
 
 
 class CreateSessionRequest(BaseModel):
+    project_id: str | None = None
     workspace_path: str | None = None
     mode: RunMode = RunMode.ASK
     title: str = "New Session"
@@ -42,6 +48,27 @@ class ResumeInterruptRequest(BaseModel):
     feedback: str | None = None
 
 
+@projects_router.get("")
+async def list_projects(service: SessionServiceDep) -> list[Project]:
+    return await service.list_projects()
+
+
+@projects_router.post("", status_code=status.HTTP_201_CREATED)
+async def create_project(
+    body: CreateProjectRequest,
+    service: SessionServiceDep,
+) -> Project:
+    return await service.create_project(body.path)
+
+
+@projects_router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_project(
+    project_id: str,
+    service: SessionServiceDep,
+) -> None:
+    await service.delete_project(project_id)
+
+
 @router.get("")
 async def list_sessions(service: SessionServiceDep) -> list[Session]:
     return await service.list_sessions()
@@ -53,6 +80,7 @@ async def create_session(
     service: SessionServiceDep,
 ) -> Session:
     return await service.create_session(
+        project_id=body.project_id,
         workspace_path=body.workspace_path,
         mode=body.mode,
         title=body.title,

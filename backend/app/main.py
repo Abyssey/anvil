@@ -15,6 +15,7 @@ from backend.app.domains.agent.workspace import WorkspaceInspector
 from backend.app.domains.artifacts.router import router as artifacts_router
 from backend.app.domains.artifacts.store import ArtifactStore
 from backend.app.domains.sessions.repository import SQLiteSessionRepository
+from backend.app.domains.sessions.router import projects_router
 from backend.app.domains.sessions.router import router as sessions_router
 from backend.app.domains.sessions.service import SessionService
 from backend.app.shared.config import AppConfig
@@ -67,6 +68,7 @@ def create_app(
         lifespan=lifespan,
     )
     register_exception_handlers(fastapi_app)
+    fastapi_app.include_router(projects_router)
     fastapi_app.include_router(sessions_router)
     fastapi_app.include_router(artifacts_router)
     fastapi_app.include_router(workspace_router)

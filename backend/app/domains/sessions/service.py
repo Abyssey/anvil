@@ -15,6 +15,7 @@ from backend.app.domains.artifacts.walkthrough_diff import ParsedFileDiff, Parse
 from backend.app.domains.sessions.entities import (
     ChatMessage,
     PendingInterrupt,
+    Project,
     RunMode,
     Session,
     SessionStatus,
@@ -23,7 +24,7 @@ from backend.app.domains.sessions.entities import (
 )
 from backend.app.domains.sessions.repository import SessionRepository
 from backend.app.shared.config import AppConfig
-from backend.app.shared.errors import InvalidInterruptResumeError
+from backend.app.shared.errors import InvalidInterruptResumeError, InvalidWorkspaceError
 from backend.app.shared.llm_credentials import LLMCredentials
 
 
@@ -45,23 +46,76 @@ class SessionService:
         self._workspace_inspector = workspace_inspector
         self._harness = harness
 
+    async def list_projects(self) -> list[Project]:
+        projects = await self._repo.list_projects()
+        if not projects:
+            default_proj = await self.create_project(str(self._config.default_workspace_path))
+            return [default_proj]
+        enriched: list[Project] = []
+        for proj in projects:
+            enriched.append(await self._enrich_project(proj))
+        return enriched
+
+    async def create_project(self, workspace_path: str) -> Project:
+        info = await self._workspace_inspector.validate_workspace(workspace_path)
+        existing = await self._repo.get_project_by_path(info.path)
+        if existing is not None:
+            return existing.model_copy(
+                update={"is_git_repo": info.is_git_repo, "branch": info.branch}
+            )
+        now = datetime.now(UTC)
+        project = Project(
+            id=uuid.uuid4().hex[:12],
+            name=info.name,
+            path=info.path,
+            is_git_repo=info.is_git_repo,
+            branch=info.branch,
+            created_at=now,
+            updated_at=now,
+        )
+        await self._repo.create_project(project)
+        return project
+
+    async def delete_project(self, project_id: str) -> None:
+        deleted_sessions = await self._repo.delete_project(project_id)
+        for sid in deleted_sessions:
+            self._artifact_store.delete_session_artifacts(sid)
+
+    async def _enrich_project(self, proj: Project) -> Project:
+        try:
+            info = await self._workspace_inspector.validate_workspace(proj.path)
+            return proj.model_copy(
+                update={"name": info.name, "is_git_repo": info.is_git_repo, "branch": info.branch}
+            )
+        except InvalidWorkspaceError:
+            return proj
+
     async def list_sessions(self) -> list[Session]:
         return await self._repo.list_sessions()
 
     async def create_session(
         self,
         *,
+        project_id: str | None = None,
         workspace_path: str | None = None,
         mode: RunMode = RunMode.ASK,
         title: str = "New Session",
     ) -> Session:
-        target = workspace_path or str(self._config.default_workspace_path)
-        info = await self._workspace_inspector.validate_workspace(target)
+        if project_id is not None:
+            project = await self._repo.get_project(project_id)
+            resolved_path = project.path
+            resolved_project_id = project.id
+        else:
+            target = workspace_path or str(self._config.default_workspace_path)
+            project = await self.create_project(target)
+            resolved_path = project.path
+            resolved_project_id = project.id
         now = datetime.now(UTC)
         session = Session(
             id=uuid.uuid4().hex[:12],
+            project_id=resolved_project_id,
             title=title.strip() or "New Session",
-            workspace_path=info.path,
+            workspace_path=resolved_path,
             mode=mode,
             status=SessionStatus.IDLE,
             created_at=now,
@@ -84,11 +138,14 @@ class SessionService:
     ) -> Session:
         session = await self._repo.get_session(session_id)
         resolved_workspace = session.workspace_path
+        resolved_project_id = session.project_id
         if workspace_path is not None:
-            info = await self._workspace_inspector.validate_workspace(workspace_path)
-            resolved_workspace = info.path
+            project = await self.create_project(workspace_path)
+            resolved_workspace = project.path
+            resolved_project_id = project.id
         updated = session.model_copy(
             update={
+                "project_id": resolved_project_id,
                 "title": title.strip() if title and title.strip() else session.title,
                 "workspace_path": resolved_workspace,
                 "mode": mode or session.mode,

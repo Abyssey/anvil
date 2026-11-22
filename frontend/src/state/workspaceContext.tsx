@@ -14,6 +14,7 @@ import type {
   ArtifactKind,
   ChatMessage,
   PendingInterrupt,
+  Project,
   RunMode,
   Session,
   StreamEvent,
@@ -40,6 +41,9 @@ export interface StreamingAssistantDraft {
 export interface WorkspaceState {
   settings: LLMSettings;
   settingsOpen: boolean;
+  addProjectOpen: boolean;
+  projects: Project[];
+  activeProjectId: string | null;
   sessions: Session[];
   activeSession: Session | null;
   messages: ChatMessage[];
@@ -55,14 +59,20 @@ export interface WorkspaceState {
   rightDrawerTab: RightDrawerTab;
   activeArtifactTab: ArtifactKind;
   streamError: string | null;
+  treeRevision: number;
 }
 
 export interface WorkspaceActions {
   openSettings: () => void;
   closeSettings: () => void;
+  openAddProject: () => void;
+  closeAddProject: () => void;
   updateSettings: (next: LLMSettings) => void;
   clearSettings: () => void;
-  createNewSession: () => Promise<void>;
+  addProject: (path: string) => Promise<void>;
+  selectProject: (projectId: string) => Promise<void>;
+  removeProject: (projectId: string) => Promise<void>;
+  createNewSession: (projectId?: string) => Promise<void>;
   selectSession: (sessionId: string) => Promise<void>;
   removeSession: (sessionId: string) => Promise<void>;
   setWorkspacePath: (path: string) => Promise<void>;
@@ -107,6 +117,14 @@ function upsertArtifactDoc(bundle: ArtifactBundle, doc: ArtifactDoc): ArtifactBu
   return { ...bundle, artifacts: [...remaining, doc] };
 }
 
+function projectForSession(projects: Project[], session: Session): Project | undefined {
+  if (session.project_id) {
+    const byId = projects.find((p) => p.id === session.project_id);
+    if (byId) return byId;
+  }
+  return projects.find((p) => p.path === session.workspace_path);
+}
+
 export function WorkspaceProvider({
   children,
   initialValue,
@@ -124,6 +142,9 @@ export function WorkspaceProvider({
 function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<LLMSettings>(() => loadLLMSettings());
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [addProjectOpen, setAddProjectOpen] = useState(false);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSession, setActiveSession] = useState<Session | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -137,57 +158,91 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
   const [artifacts, setArtifacts] = useState<ArtifactBundle>(EMPTY_ARTIFACTS);
   const [diff, setDiff] = useState<WorkspaceDiff | null>(null);
   const [diffFocus, setDiffFocus] = useState<{ path: string; hunkName?: string } | null>(null);
-  const [rightDrawerTab, setRightDrawerTab] = useState<RightDrawerTab>(null);
+  const [rightDrawerTab, setRightDrawerTab] = useState<RightDrawerTab>("files");
   const [activeArtifactTab, setActiveArtifactTab] =
     useState<ArtifactKind>("walkthrough");
   const [streamError, setStreamError] = useState<string | null>(null);
+  const [treeRevision, setTreeRevision] = useState(0);
 
   const abortRef = useRef<AbortController | null>(null);
 
-  const loadSessionDetail = useCallback(async (sessionId: string) => {
-    const [detail, artBundle] = await Promise.all([
-      apiClient.getSession(sessionId),
-      apiClient.listArtifacts(sessionId),
-    ]);
-    setActiveSession(detail.session);
-    setMessages(detail.messages);
-    setModeState(detail.session.mode);
-    setWorkspacePathState(detail.session.workspace_path);
-    setArtifacts(artBundle);
-    setWorkspaceError(null);
-
-    try {
-      const [info, diffData] = await Promise.all([
-        apiClient.validateWorkspace(detail.session.workspace_path),
-        apiClient.getWorkspaceDiff(detail.session.workspace_path),
+  const loadSessionDetail = useCallback(
+    async (sessionId: string, knownProjects?: Project[]) => {
+      const [detail, artBundle] = await Promise.all([
+        apiClient.getSession(sessionId),
+        apiClient.listArtifacts(sessionId),
       ]);
-      setWorkspaceInfo(info);
-      setDiff(diffData);
-    } catch (err) {
-      setWorkspaceInfo(null);
-      setWorkspaceError(err instanceof Error ? err.message : "Invalid workspace");
-    }
-  }, []);
+      setActiveSession(detail.session);
+      setMessages(detail.messages);
+      setModeState(detail.session.mode);
+      setWorkspacePathState(detail.session.workspace_path);
+      setArtifacts(artBundle);
+      setWorkspaceError(null);
+
+      const pool = knownProjects ?? projects;
+      const matched = projectForSession(pool, detail.session);
+      if (matched) {
+        setActiveProjectId(matched.id);
+      }
+
+      try {
+        const [info, diffData] = await Promise.all([
+          apiClient.validateWorkspace(detail.session.workspace_path),
+          apiClient.getWorkspaceDiff(detail.session.workspace_path),
+        ]);
+        setWorkspaceInfo(info);
+        setDiff(diffData);
+      } catch (err) {
+        setWorkspaceInfo(null);
+        setWorkspaceError(err instanceof Error ? err.message : "Invalid workspace");
+      }
+    },
+    [projects],
+  );
 
   useEffect(() => {
     let active = true;
     void (async () => {
       try {
-        const [defaultWs, list] = await Promise.all([
-          apiClient.getDefaultWorkspace(),
+        const [projList, sessionList] = await Promise.all([
+          apiClient.listProjects(),
           apiClient.listSessions(),
         ]);
         if (!active) return;
-        setWorkspaceInfo(defaultWs);
-        setWorkspacePathState(defaultWs.path);
-        if (list.length > 0) {
-          setSessions(list);
-          await loadSessionDetail(list[0].id);
-        } else {
-          const created = await apiClient.createSession(defaultWs.path, "ask");
+        setProjects(projList);
+        if (sessionList.length > 0) {
+          setSessions(sessionList);
+          const first = sessionList[0];
+          const matched = projectForSession(projList, first) ?? projList[0] ?? null;
+          if (matched) {
+            setActiveProjectId(matched.id);
+          }
+          await loadSessionDetail(first.id, projList);
+        } else if (projList.length > 0) {
+          const defaultProject = projList[0];
+          setActiveProjectId(defaultProject.id);
+          const created = await apiClient.createSession(
+            defaultProject.path,
+            "ask",
+            defaultProject.id,
+          );
           if (!active) return;
           setSessions([created]);
-          await loadSessionDetail(created.id);
+          await loadSessionDetail(created.id, projList);
+        } else {
+          const defaultWs = await apiClient.getDefaultWorkspace();
+          if (!active) return;
+          const createdProj = await apiClient.createProject(defaultWs.path);
+          const createdSess = await apiClient.createSession(
+            createdProj.path,
+            "ask",
+            createdProj.id,
+          );
+          if (!active) return;
+          setProjects([createdProj]);
+          setActiveProjectId(createdProj.id);
+          setSessions([createdSess]);
+          await loadSessionDetail(createdSess.id, [createdProj]);
         }
       } catch (err) {
         if (active) {
@@ -198,10 +253,13 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
     return () => {
       active = false;
     };
-  }, [loadSessionDetail]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const openSettings = useCallback(() => setSettingsOpen(true), []);
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
+  const openAddProject = useCallback(() => setAddProjectOpen(true), []);
+  const closeAddProject = useCallback(() => setAddProjectOpen(false), []);
 
   const updateSettings = useCallback((next: LLMSettings) => {
     const saved = saveLLMSettings(next);
@@ -213,13 +271,126 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
     setSettings(clearLLMSettings());
   }, []);
 
-  const createNewSession = useCallback(async () => {
-    const created = await apiClient.createSession(workspacePath || undefined, mode);
-    setSessions((prev) => [created, ...prev]);
-    setDiffFocus(null);
-    setStreamError(null);
-    await loadSessionDetail(created.id);
-  }, [workspacePath, mode, loadSessionDetail]);
+  const createNewSession = useCallback(
+    async (projectId?: string) => {
+      const targetProj =
+        (projectId ? projects.find((p) => p.id === projectId) : undefined) ??
+        projects.find((p) => p.id === activeProjectId) ??
+        projects[0];
+      const created = await apiClient.createSession(
+        targetProj?.path ?? (workspacePath || undefined),
+        mode,
+        targetProj?.id,
+      );
+      if (targetProj) {
+        setActiveProjectId(targetProj.id);
+      }
+      setSessions((prev) => [created, ...prev]);
+      setDiffFocus(null);
+      setStreamError(null);
+      await loadSessionDetail(created.id);
+    },
+    [projects, activeProjectId, workspacePath, mode, loadSessionDetail],
+  );
+
+  const selectProject = useCallback(
+    async (projectId: string) => {
+      const targetProj = projects.find((p) => p.id === projectId);
+      if (!targetProj) return;
+      setActiveProjectId(targetProj.id);
+      setWorkspacePathState(targetProj.path);
+      setStreamError(null);
+      setDiffFocus(null);
+      setRightDrawerTab("files");
+      setTreeRevision((n) => n + 1);
+
+      const projSessions = sessions.filter(
+        (s) => s.project_id === targetProj.id || s.workspace_path === targetProj.path,
+      );
+      if (projSessions.length > 0) {
+        await loadSessionDetail(projSessions[0].id);
+      } else {
+        const created = await apiClient.createSession(targetProj.path, mode, targetProj.id);
+        setSessions((prev) => [created, ...prev]);
+        await loadSessionDetail(created.id);
+      }
+    },
+    [projects, sessions, mode, loadSessionDetail],
+  );
+
+  const addProject = useCallback(
+    async (path: string) => {
+      setWorkspaceError(null);
+      const createdProj = await apiClient.createProject(path);
+      const nextProjects = [
+        createdProj,
+        ...projects.filter((p) => p.id !== createdProj.id),
+      ];
+      setProjects(nextProjects);
+      setActiveProjectId(createdProj.id);
+      setWorkspacePathState(createdProj.path);
+      setRightDrawerTab("files");
+      setTreeRevision((n) => n + 1);
+
+      const existingSessions = sessions.filter(
+        (s) => s.project_id === createdProj.id || s.workspace_path === createdProj.path,
+      );
+      if (existingSessions.length > 0) {
+        await loadSessionDetail(existingSessions[0].id, nextProjects);
+      } else {
+        const createdSess = await apiClient.createSession(
+          createdProj.path,
+          mode,
+          createdProj.id,
+        );
+        setSessions((prev) => [createdSess, ...prev]);
+        await loadSessionDetail(createdSess.id, nextProjects);
+      }
+    },
+    [projects, sessions, mode, loadSessionDetail],
+  );
+
+  const removeProject = useCallback(
+    async (projectId: string) => {
+      await apiClient.deleteProject(projectId);
+      const remainingProjects = projects.filter((p) => p.id !== projectId);
+      const remainingSessions = sessions.filter((s) => s.project_id !== projectId);
+      setProjects(remainingProjects);
+      setSessions(remainingSessions);
+
+      if (activeProjectId === projectId || activeSession?.project_id === projectId) {
+        if (remainingProjects.length > 0) {
+          const nextProj = remainingProjects[0];
+          setActiveProjectId(nextProj.id);
+          const nextProjSessions = remainingSessions.filter(
+            (s) => s.project_id === nextProj.id || s.workspace_path === nextProj.path,
+          );
+          if (nextProjSessions.length > 0) {
+            await loadSessionDetail(nextProjSessions[0].id, remainingProjects);
+          } else {
+            const created = await apiClient.createSession(nextProj.path, mode, nextProj.id);
+            setSessions([created, ...remainingSessions]);
+            await loadSessionDetail(created.id, remainingProjects);
+          }
+        } else {
+          const refreshed = await apiClient.listProjects();
+          setProjects(refreshed);
+          const fallbackProj = refreshed[0];
+          if (fallbackProj) {
+            setActiveProjectId(fallbackProj.id);
+            const created = await apiClient.createSession(
+              fallbackProj.path,
+              mode,
+              fallbackProj.id,
+            );
+            setSessions([created]);
+            await loadSessionDetail(created.id, refreshed);
+          }
+        }
+      }
+    },
+    [projects, sessions, activeProjectId, activeSession, mode, loadSessionDetail],
+  );
 
   const selectSession = useCallback(
     async (sessionId: string) => {
@@ -235,39 +406,38 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
       const remaining = sessions.filter((s) => s.id !== sessionId);
       setSessions(remaining);
       if (activeSession?.id === sessionId) {
-        if (remaining.length > 0) {
+        const sameProjectSessions = remaining.filter(
+          (s) => s.project_id === activeProjectId || s.workspace_path === workspacePath,
+        );
+        if (sameProjectSessions.length > 0) {
+          await loadSessionDetail(sameProjectSessions[0].id);
+        } else if (remaining.length > 0) {
           await loadSessionDetail(remaining[0].id);
         } else {
-          const created = await apiClient.createSession(workspacePath || undefined, mode);
+          const targetProj = projects.find((p) => p.id === activeProjectId) ?? projects[0];
+          const created = await apiClient.createSession(
+            targetProj?.path ?? (workspacePath || undefined),
+            mode,
+            targetProj?.id,
+          );
           setSessions([created]);
           await loadSessionDetail(created.id);
         }
       }
     },
-    [sessions, activeSession, workspacePath, mode, loadSessionDetail],
+    [sessions, activeSession, activeProjectId, projects, workspacePath, mode, loadSessionDetail],
   );
 
   const setWorkspacePath = useCallback(
     async (nextPath: string) => {
       setWorkspaceError(null);
       try {
-        const info = await apiClient.validateWorkspace(nextPath);
-        setWorkspaceInfo(info);
-        setWorkspacePathState(info.path);
-        if (activeSession) {
-          const updated = await apiClient.updateSession(activeSession.id, {
-            workspace_path: info.path,
-          });
-          setActiveSession(updated);
-          setSessions((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
-        }
-        const diffData = await apiClient.getWorkspaceDiff(info.path);
-        setDiff(diffData);
+        await addProject(nextPath);
       } catch (err) {
         setWorkspaceError(err instanceof Error ? err.message : "Invalid workspace path");
       }
     },
-    [activeSession],
+    [addProject],
   );
 
   const setMode = useCallback(
@@ -345,6 +515,8 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
               setActiveArtifactTab("implementation_plan");
               setRightDrawerTab("artifacts");
             }
+          } else if (ev.event === "diff_changed") {
+            setTreeRevision((n) => n + 1);
           } else if (ev.event === "error") {
             setStreamError(String(ev.data.message ?? "Agent execution error"));
           }
@@ -362,6 +534,7 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
         abortRef.current = null;
         setIsStreaming(false);
         setStreamingAssistant(null);
+        setTreeRevision((n) => n + 1);
         const [refreshedList, detail, artBundle, diffData] = await Promise.all([
           apiClient.listSessions().catch(() => sessions),
           apiClient.getSession(targetSessionId).catch(() => null),
@@ -395,7 +568,12 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
       }
       let targetSession = activeSession;
       if (!targetSession) {
-        targetSession = await apiClient.createSession(workspacePath || undefined, mode);
+        const targetProj = projects.find((p) => p.id === activeProjectId) ?? projects[0];
+        targetSession = await apiClient.createSession(
+          targetProj?.path ?? (workspacePath || undefined),
+          mode,
+          targetProj?.id,
+        );
         setActiveSession(targetSession);
         setSessions((prev) => [targetSession as Session, ...prev]);
       }
@@ -417,7 +595,7 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
         targetSession.workspace_path,
       );
     },
-    [isStreaming, settings, activeSession, workspacePath, mode, runSSEStream],
+    [isStreaming, settings, activeSession, projects, activeProjectId, workspacePath, mode, runSSEStream],
   );
 
   const stopStream = useCallback(() => {
@@ -467,6 +645,7 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
         workspacePath,
         relativePath,
       );
+      setTreeRevision((n) => n + 1);
       await refreshDiff();
       return res.saved_path;
     },
@@ -477,6 +656,9 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
     state: {
       settings,
       settingsOpen,
+      addProjectOpen,
+      projects,
+      activeProjectId,
       sessions,
       activeSession,
       messages,
@@ -492,12 +674,18 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
       rightDrawerTab,
       activeArtifactTab,
       streamError,
+      treeRevision,
     },
     actions: {
       openSettings,
       closeSettings,
+      openAddProject,
+      closeAddProject,
       updateSettings,
       clearSettings,
+      addProject,
+      selectProject,
+      removeProject,
       createNewSession,
       selectSession,
       removeSession,

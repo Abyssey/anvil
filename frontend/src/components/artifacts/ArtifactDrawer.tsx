@@ -35,7 +35,7 @@ export function ArtifactDrawer() {
   };
 
   return (
-    <VStack gap={3} padding={3} height="100%">
+    <VStack gap={3} padding={3}>
       <TabList
         value={state.activeArtifactTab}
         onChange={(val) => actions.setActiveArtifactTab(val as ArtifactKind)}

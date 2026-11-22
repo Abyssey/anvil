@@ -50,8 +50,19 @@ class PendingInterrupt(BaseModel):
     reason: str | None = None
 
 
+class Project(BaseModel):
+    id: str
+    name: str
+    path: str
+    is_git_repo: bool = False
+    branch: str = ""
+    created_at: datetime
+    updated_at: datetime
+
+
 class Session(BaseModel):
     id: str
+    project_id: str | None = None
     title: str
     workspace_path: str
     mode: RunMode = RunMode.ASK

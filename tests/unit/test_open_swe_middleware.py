@@ -88,6 +88,54 @@ async def test_run_prompt_middleware_orders_cache_friendly_sections(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_prompt_and_subagents_enforce_english_control_and_korean_output(
+    tmp_path: Path,
+) -> None:
+    from backend.app.domains.agent.subagents import build_subagents
+    from tests.fakes.fake_chat_model import ScriptedReasoningChatModel
+
+    for mode in ("ask", "plan", "auto"):
+        middleware = RunPromptMiddleware(mode=mode)
+        req = ModelRequest(
+            model=None,  # type: ignore[arg-type]
+            messages=[HumanMessage(content="Explain repo")],
+            system_message=SystemMessage(content="Base"),
+            state={"messages": []},
+        )
+        captured: list[ModelRequest] = []
+
+        async def handler(
+            updated: ModelRequest,
+            bucket: list[ModelRequest] = captured,
+        ) -> ModelResponse:
+            bucket.append(updated)
+            return ModelResponse(result=[AIMessage(content="ok")])
+
+        catalog = RunCatalog(
+            session_id="sess-lang",
+            workspace_path=tmp_path,
+            mode=mode,
+            artifacts_dir=tmp_path / ".artifacts",
+            shell_guard=ShellGuard(),
+            secret_values=(),
+        )
+        async with RunContext.activate(catalog):
+            await middleware.awrap_model_call(req, handler)
+
+        sys_text = str(captured[0].system_message.content)  # type: ignore[union-attr]
+        assert "Korean" in sys_text
+        assert "한국어" in sys_text
+        assert "/artifacts/" in sys_text
+
+    subagents = build_subagents(mode="plan", model=ScriptedReasoningChatModel(turns=[]))
+    assert len(subagents) == 2
+    for spec in subagents:
+        prompt = str(spec["system_prompt"])
+        assert "Korean" in prompt
+        assert "한국어" in prompt
+
+
+@pytest.mark.asyncio
 async def test_subdir_agents_middleware_injects_ancestor_agents_once(tmp_path: Path) -> None:
     (tmp_path / "AGENTS.md").write_text("Root rule: use async.", encoding="utf-8")
     nested = tmp_path / "pkg"

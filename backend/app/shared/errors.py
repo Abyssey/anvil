@@ -69,6 +69,14 @@ class SessionNotFoundError(DomainError):
         super().__init__(f"Session not found: {session_id}", details={"session_id": session_id})
 
 
+class ProjectNotFoundError(DomainError):
+    status_code = 404
+    code = "PROJECT_NOT_FOUND"
+
+    def __init__(self, project_id: str) -> None:
+        super().__init__(f"Project not found: {project_id}", details={"project_id": project_id})
+
+
 class ArtifactNotFoundError(DomainError):
     status_code = 404
     code = "ARTIFACT_NOT_FOUND"

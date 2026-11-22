@@ -30,8 +30,33 @@ export interface PendingInterrupt {
   reason?: string | null;
 }
 
+export interface Project {
+  id: string;
+  name: string;
+  path: string;
+  is_git_repo: boolean;
+  branch: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DirectoryEntry {
+  name: string;
+  path: string;
+  is_git_repo: boolean;
+}
+
+export interface DirectoryBrowseResponse {
+  current_path: string;
+  parent_path: string | null;
+  is_git_repo: boolean;
+  branch: string;
+  directories: DirectoryEntry[];
+}
+
 export interface Session {
   id: string;
+  project_id?: string | null;
   title: string;
   workspace_path: string;
   mode: RunMode;

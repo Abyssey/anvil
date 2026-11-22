@@ -49,6 +49,20 @@ class WorkspaceDiffResponse(BaseModel):
     files: list[FileDiff] = Field(default_factory=list)
 
 
+class DirectoryEntry(BaseModel):
+    name: str
+    path: str
+    is_git_repo: bool = False
+
+
+class DirectoryBrowseResponse(BaseModel):
+    current_path: str
+    parent_path: str | None = None
+    is_git_repo: bool = False
+    branch: str = ""
+    directories: list[DirectoryEntry] = Field(default_factory=list)
+
+
 class WorkspaceInspector:
     """Inspects local repositories safely within canonical workspace boundaries."""
 
@@ -67,6 +81,48 @@ class WorkspaceInspector:
             is_git_repo=is_git,
             branch=branch if is_git else "",
         )
+
+    async def browse_directories(
+        self,
+        workspace_path: str | None = None,
+    ) -> DirectoryBrowseResponse:
+        target = self._resolve_root(workspace_path) if workspace_path else Path.home().resolve()
+        info = await self.validate_workspace(str(target))
+        directories = await asyncio.to_thread(self._list_child_dirs, target)
+        parent = str(target.parent) if target.parent != target else None
+        return DirectoryBrowseResponse(
+            current_path=str(target),
+            parent_path=parent,
+            is_git_repo=info.is_git_repo,
+            branch=info.branch,
+            directories=directories,
+        )
+
+    @staticmethod
+    def _list_child_dirs(target: Path) -> list[DirectoryEntry]:
+        entries: list[DirectoryEntry] = []
+        try:
+            children = sorted(target.iterdir(), key=lambda p: p.name.lower())
+        except PermissionError:
+            return []
+        for child in children:
+            if child.name.startswith(".") or child.name in _IGNORED_NAMES:
+                continue
+            try:
+                if not child.is_dir():
+                    continue
+                resolved = child.resolve()
+                is_git = (resolved / ".git").exists()
+            except OSError:
+                continue
+            entries.append(
+                DirectoryEntry(
+                    name=child.name,
+                    path=str(resolved),
+                    is_git_repo=is_git,
+                )
+            )
+        return entries
 
     async def list_tree(
         self,

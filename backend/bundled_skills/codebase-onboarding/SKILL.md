@@ -18,3 +18,4 @@ Use when asked to explain, map, or onboard someone onto a repository quickly.
    - Core execution/data flow and external dependencies
    - How to run tests, lint, and start the app locally
    - Cite exact observed file paths and symbol names only.
+   - Write the final onboarding summary and `/artifacts/walkthrough.md` in Korean (한국어) by default unless the user explicitly asks for another language.

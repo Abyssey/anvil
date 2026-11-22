@@ -170,7 +170,9 @@ class ArtifactWorkflowMiddleware(AgentMiddleware[ArtifactWorkflowState, Any, Any
                         HumanMessage(
                             content=(
                                 "Plan approved. Implement the plan, verify changes, "
-                                "and update /artifacts/walkthrough.md."
+                                "and update /artifacts/walkthrough.md. "
+                                "Write all user-facing responses and artifacts in Korean "
+                                "(한국어) by default."
                             )
                         )
                     ],
@@ -189,7 +191,9 @@ class ArtifactWorkflowMiddleware(AgentMiddleware[ArtifactWorkflowState, Any, Any
                     HumanMessage(
                         content=(
                             f"Plan revision requested: {feedback}. "
-                            "Update /artifacts/implementation_plan.md accordingly."
+                            "Update /artifacts/implementation_plan.md accordingly. "
+                            "Write all user-facing responses and artifacts in Korean "
+                            "(한국어) by default."
                         )
                     )
                 ],

@@ -9,14 +9,25 @@ import {
   type WorkspaceState,
 } from "../../state/workspaceContext";
 import { SettingsDialog } from "../settings/SettingsDialog";
+import { AddProjectDialog } from "../workspace/AddProjectDialog";
 import { WorkspaceShell } from "../workspace/WorkspaceShell";
 
 function makeMockValue(
   stateOverrides: Partial<WorkspaceState> = {},
   actionOverrides: Partial<WorkspaceActions> = {},
 ): WorkspaceContextValue {
+  const baseProject = {
+    id: "proj-1",
+    name: "repo",
+    path: "/repo",
+    is_git_repo: true,
+    branch: "main",
+    created_at: "2026-11-22T00:00:00Z",
+    updated_at: "2026-11-22T00:00:00Z",
+  };
   const baseSession = {
     id: "sess-1",
+    project_id: "proj-1",
     title: "Code Onboarding",
     workspace_path: "/repo",
     mode: "ask" as const,
@@ -33,6 +44,9 @@ function makeMockValue(
       enableThinking: true,
     },
     settingsOpen: false,
+    addProjectOpen: false,
+    projects: [baseProject],
+    activeProjectId: "proj-1",
     sessions: [baseSession],
     activeSession: baseSession,
     messages: [],
@@ -48,13 +62,19 @@ function makeMockValue(
     rightDrawerTab: null,
     activeArtifactTab: "walkthrough",
     streamError: null,
+    treeRevision: 0,
     ...stateOverrides,
   };
   const actions: WorkspaceActions = {
     openSettings: vi.fn(),
     closeSettings: vi.fn(),
+    openAddProject: vi.fn(),
+    closeAddProject: vi.fn(),
     updateSettings: vi.fn(),
     clearSettings: vi.fn(),
+    addProject: vi.fn().mockResolvedValue(undefined),
+    selectProject: vi.fn().mockResolvedValue(undefined),
+    removeProject: vi.fn().mockResolvedValue(undefined),
     createNewSession: vi.fn().mockResolvedValue(undefined),
     selectSession: vi.fn().mockResolvedValue(undefined),
     removeSession: vi.fn().mockResolvedValue(undefined),
@@ -83,6 +103,7 @@ function renderWorkspace(value: WorkspaceContextValue) {
       <WorkspaceProvider initialValue={value}>
         <WorkspaceShell />
         <SettingsDialog />
+        <AddProjectDialog />
       </WorkspaceProvider>
     </Theme>,
   );
@@ -262,5 +283,44 @@ describe("Abyss Workspace UI (Astryx + HITL)", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(val.actions.resumeInterrupt).toHaveBeenCalledWith("deny");
+  });
+
+  it("omits left sidebar collapse button and renders Add Project button", () => {
+    const val = makeMockValue();
+    renderWorkspace(val);
+
+    expect(screen.queryByRole("button", { name: /collapse/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Add Project/i })).toBeInTheDocument();
+  });
+
+  it("filters project files and switches to dedicated file preview with Back to Files", async () => {
+    const { apiClient } = await import("../../api/client");
+    vi.spyOn(apiClient, "getWorkspaceTree").mockResolvedValue([
+      { name: "README.md", path: "README.md", is_dir: false, size: 12, children: [] },
+      { name: "main.py", path: "main.py", is_dir: false, size: 40, children: [] },
+    ]);
+    vi.spyOn(apiClient, "getWorkspaceFile").mockResolvedValue({
+      path: "main.py",
+      content: "print('hello')\n",
+      is_binary: false,
+      truncated: false,
+      size: 15,
+    });
+
+    const val = makeMockValue({ rightDrawerTab: "files" });
+    renderWorkspace(val);
+
+    const filterInput = await screen.findByPlaceholderText(/Filter files/i);
+    await screen.findByText("README.md");
+    fireEvent.change(filterInput, { target: { value: "main" } });
+    expect(screen.queryByText("README.md")).not.toBeInTheDocument();
+    expect(screen.getByText("main.py")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("main.py"));
+    const backBtn = await screen.findByRole("button", { name: /Back to Files/i });
+    expect(screen.getByText(/print\('hello'\)/)).toBeInTheDocument();
+
+    fireEvent.click(backBtn);
+    expect(screen.getByPlaceholderText(/Filter files/i)).toBeInTheDocument();
   });
 });

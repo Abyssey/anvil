@@ -525,3 +525,99 @@ def test_plan_deny_cancels_cleanly_and_delete_session_removes_artifacts(
         del_resp = client.delete(f"/api/sessions/{sid}")
         assert del_resp.status_code == 204
         assert not (cfg.artifacts_root / sid).exists()
+
+
+def test_projects_crud_browse_legacy_migration_and_cascade_cleanup(tmp_path: Path) -> None:
+    import sqlite3
+
+    repo_a = tmp_path / "repo_a"
+    repo_b = tmp_path / "repo_b"
+    _init_workspace(repo_a)
+    _init_workspace(repo_b)
+
+    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=repo_a)
+    cfg.ensure_directories()
+
+    # Seed legacy SQLite database without `projects` table or `sessions.project_id`
+    conn = sqlite3.connect(cfg.sqlite_path)
+    conn.execute(
+        """
+        CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            workspace_path TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            status TEXT NOT NULL,
+            pending_interrupt_json TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO sessions (
+            id, title, workspace_path, mode, status,
+            pending_interrupt_json, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
+        """,
+        (
+            "legacy-sess",
+            "Legacy Session",
+            str(repo_a.resolve()),
+            "ask",
+            "idle",
+            "2026-11-22T00:00:00+00:00",
+            "2026-11-22T00:00:00+00:00",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    model = ScriptedReasoningChatModel(turns=[ScriptedTurn(content="ok")])
+    app = create_app(config=cfg, model_factory=_FakeModelFactory(model))
+    with TestClient(app) as client:
+        # 1. Legacy session was migrated to a Project automatically
+        projects = client.get("/api/projects").json()
+        assert len(projects) == 1
+        proj_a = projects[0]
+        assert proj_a["path"] == str(repo_a.resolve())
+        assert proj_a["is_git_repo"] is True
+
+        legacy_detail = client.get("/api/sessions/legacy-sess").json()
+        assert legacy_detail["session"]["project_id"] == proj_a["id"]
+
+        # 2. Browse endpoint lists both repos under tmp_path
+        browse = client.get("/api/workspace/browse", params={"path": str(tmp_path)}).json()
+        dir_names = [d["name"] for d in browse["directories"]]
+        assert "repo_a" in dir_names
+        assert "repo_b" in dir_names
+
+        # 3. Register repo_b (idempotent on duplicate)
+        created_b = client.post("/api/projects", json={"path": str(repo_b)})
+        assert created_b.status_code == 201
+        proj_b = created_b.json()
+        assert proj_b["name"] == "repo_b"
+
+        dup_b = client.post("/api/projects", json={"path": str(repo_b)})
+        assert dup_b.status_code == 201
+        assert dup_b.json()["id"] == proj_b["id"]
+
+        # 4. Create session under proj_b by project_id and write an artifact
+        sess_b = client.post(
+            "/api/sessions",
+            json={"project_id": proj_b["id"], "mode": "ask"},
+        ).json()
+        assert sess_b["project_id"] == proj_b["id"]
+        assert sess_b["workspace_path"] == str(repo_b.resolve())
+
+        art_dir = cfg.artifacts_root / sess_b["id"]
+        art_dir.mkdir(parents=True, exist_ok=True)
+        (art_dir / "walkthrough.md").write_text("# Temp", encoding="utf-8")
+
+        # 5. Delete proj_b -> cascades session AND cleans disk artifacts
+        del_proj = client.delete(f"/api/projects/{proj_b['id']}")
+        assert del_proj.status_code == 204
+        assert client.get(f"/api/sessions/{sess_b['id']}").status_code == 404
+        assert not art_dir.exists()

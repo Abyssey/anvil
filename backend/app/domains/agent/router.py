@@ -7,6 +7,7 @@ from typing import Annotated
 from fastapi import APIRouter, Query
 
 from backend.app.domains.agent.workspace import (
+    DirectoryBrowseResponse,
     FilePreview,
     TreeNode,
     WorkspaceDiffResponse,
@@ -35,6 +36,14 @@ async def validate_workspace(
     inspector: WorkspaceInspectorDep,
 ) -> WorkspaceInfo:
     return await inspector.validate_workspace(path)
+
+
+@router.get("/browse")
+async def browse_workspace_directories(
+    inspector: WorkspaceInspectorDep,
+    path: Annotated[str | None, Query()] = None,
+) -> DirectoryBrowseResponse:
+    return await inspector.browse_directories(path)
 
 
 @router.get("/tree")

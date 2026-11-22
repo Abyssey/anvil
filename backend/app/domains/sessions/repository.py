@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -14,16 +15,22 @@ import aiosqlite
 from backend.app.domains.sessions.entities import (
     ChatMessage,
     PendingInterrupt,
+    Project,
     RunMode,
     Session,
     SessionStatus,
     ToolCallRecord,
 )
-from backend.app.shared.errors import SessionNotFoundError
+from backend.app.shared.errors import ProjectNotFoundError, SessionNotFoundError
 
 
 class SessionRepository(Protocol):
     async def initialize(self) -> None: ...
+    async def list_projects(self) -> list[Project]: ...
+    async def get_project(self, project_id: str) -> Project: ...
+    async def get_project_by_path(self, path: str) -> Project | None: ...
+    async def create_project(self, project: Project) -> Project: ...
+    async def delete_project(self, project_id: str) -> list[str]: ...
     async def list_sessions(self) -> list[Session]: ...
     async def create_session(self, session: Session) -> Session: ...
     async def get_session(self, session_id: str) -> Session: ...
@@ -53,8 +60,20 @@ class SQLiteSessionRepository:
             await db.execute("PRAGMA journal_mode=WAL;")
             await db.execute(
                 """
+                CREATE TABLE IF NOT EXISTS projects (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    path TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            await db.execute(
+                """
                 CREATE TABLE IF NOT EXISTS sessions (
                     id TEXT PRIMARY KEY,
+                    project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
                     title TEXT NOT NULL,
                     workspace_path TEXT NOT NULL,
                     mode TEXT NOT NULL,
@@ -65,6 +84,44 @@ class SQLiteSessionRepository:
                 )
                 """
             )
+            async with db.execute("PRAGMA table_info(sessions)") as cursor:
+                columns = {row["name"] for row in await cursor.fetchall()}
+            if "project_id" not in columns:
+                await db.execute("ALTER TABLE sessions ADD COLUMN project_id TEXT")
+
+            # Backfill projects for any legacy sessions without a project_id
+            async with db.execute(
+                "SELECT DISTINCT workspace_path FROM sessions WHERE project_id IS NULL"
+            ) as cursor:
+                orphan_paths = [str(row["workspace_path"]) for row in await cursor.fetchall()]
+
+            now_iso = datetime.now(UTC).isoformat()
+            for raw_path in orphan_paths:
+                async with db.execute(
+                    "SELECT id FROM projects WHERE path = ?",
+                    (raw_path,),
+                ) as pcur:
+                    existing = await pcur.fetchone()
+                if existing is not None:
+                    proj_id = str(existing["id"])
+                else:
+                    proj_id = uuid.uuid4().hex[:12]
+                    proj_name = Path(raw_path).name or raw_path
+                    await db.execute(
+                        """
+                        INSERT INTO projects (id, name, path, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (proj_id, proj_name, raw_path, now_iso, now_iso),
+                    )
+                await db.execute(
+                    """
+                    UPDATE sessions SET project_id = ?
+                    WHERE workspace_path = ? AND project_id IS NULL
+                    """,
+                    (proj_id, raw_path),
+                )
+
             await db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS messages (
@@ -80,6 +137,63 @@ class SQLiteSessionRepository:
             )
             await db.commit()
 
+    async def list_projects(self) -> list[Project]:
+        async with self._connect() as db, db.execute(
+            "SELECT * FROM projects ORDER BY updated_at DESC"
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [self._row_to_project(row) for row in rows]
+
+    async def get_project(self, project_id: str) -> Project:
+        async with self._connect() as db, db.execute(
+            "SELECT * FROM projects WHERE id = ?",
+            (project_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row is None:
+            raise ProjectNotFoundError(project_id)
+        return self._row_to_project(row)
+
+    async def get_project_by_path(self, path: str) -> Project | None:
+        async with self._connect() as db, db.execute(
+            "SELECT * FROM projects WHERE path = ?",
+            (path,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        return self._row_to_project(row) if row is not None else None
+
+    async def create_project(self, project: Project) -> Project:
+        async with self._connect() as db:
+            await db.execute(
+                """
+                INSERT INTO projects (id, name, path, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    project.id,
+                    project.name,
+                    project.path,
+                    project.created_at.isoformat(),
+                    project.updated_at.isoformat(),
+                ),
+            )
+            await db.commit()
+        return project
+
+    async def delete_project(self, project_id: str) -> list[str]:
+        async with self._connect() as db:
+            async with db.execute(
+                "SELECT id FROM sessions WHERE project_id = ?",
+                (project_id,),
+            ) as cursor:
+                session_ids = [str(row["id"]) for row in await cursor.fetchall()]
+            await db.execute("DELETE FROM sessions WHERE project_id = ?", (project_id,))
+            cursor = await db.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+            if cursor.rowcount == 0:
+                raise ProjectNotFoundError(project_id)
+            await db.commit()
+        return session_ids
+
     async def list_sessions(self) -> list[Session]:
         async with self._connect() as db, db.execute(
             "SELECT * FROM sessions ORDER BY updated_at DESC"
@@ -92,13 +206,14 @@ class SQLiteSessionRepository:
             await db.execute(
                 """
                 INSERT INTO sessions (
-                    id, title, workspace_path, mode, status,
+                    id, project_id, title, workspace_path, mode, status,
                     pending_interrupt_json, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session.id,
+                    session.project_id,
                     session.title,
                     session.workspace_path,
                     session.mode.value,
@@ -129,11 +244,12 @@ class SQLiteSessionRepository:
             cursor = await db.execute(
                 """
                 UPDATE sessions
-                SET title = ?, workspace_path = ?, mode = ?, status = ?,
+                SET project_id = ?, title = ?, workspace_path = ?, mode = ?, status = ?,
                     pending_interrupt_json = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
+                    updated.project_id,
                     updated.title,
                     updated.workspace_path,
                     updated.mode.value,
@@ -204,11 +320,22 @@ class SQLiteSessionRepository:
         return messages
 
     @staticmethod
+    def _row_to_project(row: aiosqlite.Row) -> Project:
+        return Project(
+            id=row["id"],
+            name=row["name"],
+            path=row["path"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
+    @staticmethod
     def _row_to_session(row: aiosqlite.Row) -> Session:
         raw_int = row["pending_interrupt_json"]
         pending = PendingInterrupt.model_validate_json(raw_int) if raw_int else None
         return Session(
             id=row["id"],
+            project_id=row["project_id"],
             title=row["title"],
             workspace_path=row["workspace_path"],
             mode=RunMode(row["mode"]),

@@ -55,9 +55,19 @@ describe("App + LiveWorkspaceProvider end-to-end integration", () => {
     spy.mockRestore();
   });
 
-  it("completes Settings setup, [6] Code Onboarding SSE stream, and Artifact Drawer auto-open", async () => {
+  it("completes Project Files boot, Settings setup, [6] Code Onboarding SSE stream, and Artifact Drawer auto-open", async () => {
+    const project = {
+      id: "proj-live",
+      name: "repo",
+      path: "/repo",
+      is_git_repo: true,
+      branch: "main",
+      created_at: "2026-11-22T00:00:00Z",
+      updated_at: "2026-11-22T00:00:00Z",
+    };
     const session = {
       id: "sess-live",
+      project_id: "proj-live",
       title: "New Session",
       workspace_path: "/repo",
       mode: "ask" as const,
@@ -74,6 +84,14 @@ describe("App + LiveWorkspaceProvider end-to-end integration", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
+        if (url === "/api/projects" && (!init?.method || init.method === "GET")) {
+          return jsonResponse([project]);
+        }
+        if (url.startsWith("/api/workspace/tree")) {
+          return jsonResponse([
+            { name: "README.md", path: "README.md", is_dir: false, size: 120, children: [] },
+          ]);
+        }
         if (url.startsWith("/api/workspace/default") || url.startsWith("/api/workspace/validate")) {
           return jsonResponse({ path: "/repo", name: "repo", is_git_repo: true, branch: "main" });
         }
@@ -160,7 +178,8 @@ describe("App + LiveWorkspaceProvider end-to-end integration", () => {
       </Theme>,
     );
 
-    // 1. Empty state shows unconfigured banner -> Open Settings
+    // 1. Project Files auto-open immediately on boot + empty state shows unconfigured banner
+    await screen.findByText("README.md");
     const openBtn = await screen.findByRole("button", { name: "Open Settings" });
     fireEvent.click(openBtn);
 

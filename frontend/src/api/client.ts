@@ -1,7 +1,9 @@
 import type {
   ArtifactBundle,
   ArtifactKind,
+  DirectoryBrowseResponse,
   FilePreview,
+  Project,
   RunMode,
   Session,
   SessionDetail,
@@ -66,6 +68,29 @@ export const apiClient = {
     return fetchJson(`/api/workspace/validate?path=${encodeURIComponent(path)}`);
   },
 
+  browseDirectories(path?: string): Promise<DirectoryBrowseResponse> {
+    const qs = path ? `?path=${encodeURIComponent(path)}` : "";
+    return fetchJson(`/api/workspace/browse${qs}`);
+  },
+
+  listProjects(): Promise<Project[]> {
+    return fetchJson("/api/projects");
+  },
+
+  createProject(path: string): Promise<Project> {
+    return fetchJson("/api/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+  },
+
+  deleteProject(projectId: string): Promise<void> {
+    return fetchJson(`/api/projects/${encodeURIComponent(projectId)}`, {
+      method: "DELETE",
+    });
+  },
+
   getWorkspaceTree(path: string, relPath = "", maxDepth = 3): Promise<TreeNode[]> {
     const qs = new URLSearchParams({
       path,
@@ -95,11 +120,19 @@ export const apiClient = {
     return fetchJson("/api/sessions");
   },
 
-  createSession(workspacePath?: string, mode: RunMode = "ask"): Promise<Session> {
+  createSession(
+    workspacePath?: string,
+    mode: RunMode = "ask",
+    projectId?: string,
+  ): Promise<Session> {
     return fetchJson("/api/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workspace_path: workspacePath ?? null, mode }),
+      body: JSON.stringify({
+        project_id: projectId ?? null,
+        workspace_path: workspacePath ?? null,
+        mode,
+      }),
     });
   },
 
