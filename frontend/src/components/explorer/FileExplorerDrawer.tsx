@@ -15,6 +15,7 @@ import {
 import { apiClient } from "../../api/client";
 import type { FilePreview, TreeNode } from "../../api/types";
 import { useWorkspace } from "../../state/workspaceContext";
+import { inferCodeLanguage } from "../../utils/codeLanguage";
 
 interface FlatTreeItem {
   node: TreeNode;
@@ -154,6 +155,7 @@ export function FileExplorerDrawer() {
         <CodeBlock
           title={preview.path}
           code={preview.is_binary ? "[Binary file omitted]" : preview.content}
+          language={preview.is_binary ? "plaintext" : inferCodeLanguage(preview.path)}
           hasLineNumbers
           maxHeight={640}
           width="100%"

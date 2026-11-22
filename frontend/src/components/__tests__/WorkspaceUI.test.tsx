@@ -353,7 +353,9 @@ describe("Abyss Workspace UI (Astryx + HITL)", () => {
 
     fireEvent.click(screen.getByText("main.py"));
     const backBtn = await screen.findByRole("button", { name: /Back to Files/i });
-    expect(screen.getByText(/print\('hello'\)/)).toBeInTheDocument();
+    const codeBlock = document.querySelector(".astryx-code-block");
+    expect(codeBlock).toHaveAttribute("data-language", "python");
+    expect(codeBlock).toHaveTextContent("print('hello')");
 
     fireEvent.click(backBtn);
     expect(screen.getByPlaceholderText(/Filter files/i)).toBeInTheDocument();
