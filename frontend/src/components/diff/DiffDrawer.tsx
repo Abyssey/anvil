@@ -7,6 +7,7 @@ import { HStack, VStack } from "@astryxdesign/core/Stack";
 import { Text } from "@astryxdesign/core/Text";
 import type { FileDiff } from "../../api/types";
 import { useWorkspace } from "../../state/workspaceContext";
+import { inferCodeLanguage } from "../../utils/codeLanguage";
 
 function formatFileDiff(file: FileDiff): string {
   if (file.status === "untracked") {
@@ -26,7 +27,12 @@ function formatFileDiff(file: FileDiff): string {
 export function DiffDrawer() {
   const { state, actions } = useWorkspace();
   const files = state.diff?.files ?? [];
+  const activeSessionId = state.activeSession?.id ?? null;
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+
+  useEffect(() => {
+    setSelectedPath(null);
+  }, [activeSessionId, state.workspacePath]);
 
   useEffect(() => {
     if (state.diffFocus?.path) {
@@ -76,6 +82,7 @@ export function DiffDrawer() {
                   : activeFile.path
               }
               code={formatFileDiff(activeFile)}
+              language={inferCodeLanguage(activeFile.path)}
               isDiff
               hasLineNumbers
               maxHeight={400}
