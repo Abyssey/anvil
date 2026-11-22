@@ -9,7 +9,13 @@ from fastapi import APIRouter, Query, status
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, Field
 
-from backend.app.domains.sessions.entities import ChatMessage, Project, RunMode, Session
+from backend.app.domains.sessions.entities import (
+    ChatMessage,
+    Project,
+    ProjectMemory,
+    RunMode,
+    Session,
+)
 from backend.app.shared.dependencies import LLMCredentialsDep, SessionServiceDep
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
@@ -18,6 +24,10 @@ projects_router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 class CreateProjectRequest(BaseModel):
     path: str = Field(min_length=1)
+
+
+class UpdateProjectMemoryRequest(BaseModel):
+    content: str
 
 
 class CreateSessionRequest(BaseModel):
@@ -47,6 +57,7 @@ class MessagePageResponse(BaseModel):
 class StreamMessageRequest(BaseModel):
     content: str = Field(min_length=1)
     mode: RunMode | None = None
+    pinned_skills: list[str] = Field(default_factory=list)
 
 
 class ResumeInterruptRequest(BaseModel):
@@ -73,6 +84,31 @@ async def delete_project(
     service: SessionServiceDep,
 ) -> None:
     await service.delete_project(project_id)
+
+
+@projects_router.get("/{project_id}/memory")
+async def get_project_memory(
+    project_id: str,
+    service: SessionServiceDep,
+) -> ProjectMemory:
+    return await service.get_project_memory(project_id)
+
+
+@projects_router.put("/{project_id}/memory")
+async def update_project_memory(
+    project_id: str,
+    body: UpdateProjectMemoryRequest,
+    service: SessionServiceDep,
+) -> ProjectMemory:
+    return await service.update_project_memory(project_id, body.content)
+
+
+@projects_router.delete("/{project_id}/memory", status_code=status.HTTP_204_NO_CONTENT)
+async def clear_project_memory(
+    project_id: str,
+    service: SessionServiceDep,
+) -> None:
+    await service.clear_project_memory(project_id)
 
 
 @router.get("")
@@ -156,6 +192,7 @@ async def stream_session_message(
         content=body.content,
         mode=body.mode,
         creds=creds,
+        pinned_skills=body.pinned_skills,
     ):
         yield ServerSentEvent(event=ev.event, data=ev.data)
 

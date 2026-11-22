@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -16,15 +17,24 @@ from backend.app.domains.sessions.entities import (
     ChatMessage,
     PendingInterrupt,
     Project,
+    ProjectMemory,
     RunMode,
     Session,
     SessionStatus,
     StreamEvent,
     ToolCallRecord,
 )
+from backend.app.domains.sessions.memory_store import (
+    MAX_PROJECT_MEMORY_BYTES,
+    ProjectMemoryStore,
+)
 from backend.app.domains.sessions.repository import SessionRepository
 from backend.app.shared.config import AppConfig
-from backend.app.shared.errors import InvalidInterruptResumeError, InvalidWorkspaceError
+from backend.app.shared.errors import (
+    DomainError,
+    InvalidInterruptResumeError,
+    InvalidWorkspaceError,
+)
 from backend.app.shared.llm_credentials import LLMCredentials
 
 
@@ -39,12 +49,16 @@ class SessionService:
         artifact_store: ArtifactStore,
         workspace_inspector: WorkspaceInspector,
         harness: DeepAgentHarness,
+        memories_root: Path | None = None,
+        on_delete_session_thread: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self._config = config
         self._repo = repo
         self._artifact_store = artifact_store
         self._workspace_inspector = workspace_inspector
         self._harness = harness
+        self._memory_store = ProjectMemoryStore(memories_root or config.memories_root)
+        self._on_delete_session_thread = on_delete_session_thread
 
     async def list_projects(self) -> list[Project]:
         projects = await self._repo.list_projects()
@@ -76,10 +90,46 @@ class SessionService:
         await self._repo.create_project(project)
         return project
 
+    async def _delete_session_thread(self, session_id: str) -> None:
+        if self._on_delete_session_thread is not None:
+            await self._on_delete_session_thread(session_id)
+        elif hasattr(self._harness, "delete_thread"):
+            await self._harness.delete_thread(session_id)
+
     async def delete_project(self, project_id: str) -> None:
         deleted_sessions = await self._repo.delete_project(project_id)
         for sid in deleted_sessions:
             self._artifact_store.delete_session_artifacts(sid)
+            await self._delete_session_thread(sid)
+        self._memory_store.delete_project_dir(project_id)
+
+    async def get_project_memory(self, project_id: str) -> ProjectMemory:
+        project = await self._repo.get_project(project_id)
+        content, updated_at = self._memory_store.read(project.id)
+        has_repo_agents_md = (Path(project.path) / "AGENTS.md").is_file()
+        return ProjectMemory(
+            project_id=project.id,
+            content=content,
+            updated_at=updated_at,
+            has_repo_agents_md=has_repo_agents_md,
+            max_bytes=MAX_PROJECT_MEMORY_BYTES,
+        )
+
+    async def update_project_memory(self, project_id: str, content: str) -> ProjectMemory:
+        project = await self._repo.get_project(project_id)
+        saved, updated_at = self._memory_store.write(project.id, content)
+        has_repo_agents_md = (Path(project.path) / "AGENTS.md").is_file()
+        return ProjectMemory(
+            project_id=project.id,
+            content=saved,
+            updated_at=updated_at,
+            has_repo_agents_md=has_repo_agents_md,
+            max_bytes=MAX_PROJECT_MEMORY_BYTES,
+        )
+
+    async def clear_project_memory(self, project_id: str) -> None:
+        project = await self._repo.get_project(project_id)
+        self._memory_store.clear(project.id)
 
     async def _enrich_project(self, proj: Project) -> Project:
         try:
@@ -160,17 +210,23 @@ class SessionService:
         mode: RunMode | None = None,
     ) -> Session:
         session = await self._repo.get_session(session_id)
-        resolved_workspace = session.workspace_path
-        resolved_project_id = session.project_id
         if workspace_path is not None:
-            project = await self.create_project(workspace_path)
-            resolved_workspace = project.path
-            resolved_project_id = project.id
+            current_resolved = str(Path(session.workspace_path).expanduser().resolve())
+            candidate_resolved = str(Path(workspace_path).expanduser().resolve())
+            if candidate_resolved != current_resolved:
+                raise DomainError(
+                    "Cannot move an existing session to a different project workspace.",
+                    status_code=400,
+                    code="SESSION_PROJECT_IMMUTABLE",
+                    details={
+                        "session_id": session_id,
+                        "current_workspace_path": current_resolved,
+                        "requested_workspace_path": candidate_resolved,
+                    },
+                )
         updated = session.model_copy(
             update={
-                "project_id": resolved_project_id,
                 "title": title.strip() if title and title.strip() else session.title,
-                "workspace_path": resolved_workspace,
                 "mode": mode or session.mode,
             }
         )
@@ -179,6 +235,7 @@ class SessionService:
     async def delete_session(self, session_id: str) -> None:
         await self._repo.delete_session(session_id)
         self._artifact_store.delete_session_artifacts(session_id)
+        await self._delete_session_thread(session_id)
 
     async def stream_message(
         self,
@@ -187,6 +244,7 @@ class SessionService:
         content: str,
         mode: RunMode | None,
         creds: LLMCredentials,
+        pinned_skills: list[str] | None = None,
     ) -> AsyncIterator[StreamEvent]:
         session = await self._repo.get_session(session_id)
         active_mode = mode or session.mode
@@ -215,12 +273,20 @@ class SessionService:
             )
         )
 
+        run_kwargs: dict[str, object] = {}
+        run_params = inspect.signature(self._harness.stream_run).parameters
+        if "project_id" in run_params:
+            run_kwargs["project_id"] = session.project_id or session.id
+        if "pinned_skills" in run_params:
+            run_kwargs["pinned_skills"] = pinned_skills
+
         raw_stream = self._harness.stream_run(
             session_id=session.id,
             workspace_path=Path(session.workspace_path),
             mode=active_mode.value,
             user_message=content,
             creds=creds,
+            **run_kwargs,  # type: ignore[arg-type]
         )
         async for ev in self._consume_and_persist_stream(session, raw_stream):
             yield ev
@@ -245,6 +311,11 @@ class SessionService:
                 }
             )
         )
+        resume_kwargs: dict[str, object] = {}
+        resume_params = inspect.signature(self._harness.stream_resume).parameters
+        if "project_id" in resume_params:
+            resume_kwargs["project_id"] = session.project_id or session.id
+
         raw_stream = self._harness.stream_resume(
             session_id=session.id,
             workspace_path=Path(session.workspace_path),
@@ -252,6 +323,7 @@ class SessionService:
             decision=decision,
             feedback=feedback,
             creds=creds,
+            **resume_kwargs,  # type: ignore[arg-type]
         )
         async for ev in self._consume_and_persist_stream(session, raw_stream):
             yield ev
