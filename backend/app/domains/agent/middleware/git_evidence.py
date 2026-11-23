@@ -74,16 +74,63 @@ class GitEvidenceTracker:
         return paths
 
     async def _probe_git(self) -> GitSnapshot:
-        if not (self.workspace_path / ".git").exists():
-            is_inside = await run_git(self.workspace_path, "rev-parse", "--is-inside-work-tree")
-            if is_inside != "true":
-                return GitSnapshot(is_git_repo=False)
+        raw = await run_git(
+            self.workspace_path,
+            "status",
+            "--porcelain=v2",
+            "--branch",
+            "-z",
+            strip_output=False,
+        )
+        if not raw:
+            return GitSnapshot(is_git_repo=False)
 
-        branch = await run_git(self.workspace_path, "rev-parse", "--abbrev-ref", "HEAD")
-        head = await run_git(self.workspace_path, "rev-parse", "HEAD")
-        status_raw = await run_git(self.workspace_path, "status", "--porcelain")
-        entries = tuple(line for line in status_raw.splitlines() if line.strip())
-        return GitSnapshot(is_git_repo=True, branch=branch, head=head, dirty_entries=entries)
+        branch = ""
+        head = ""
+        entries: list[str] = []
+        tokens = raw.split("\0")
+        idx = 0
+        total = len(tokens)
+        while idx < total:
+            token = tokens[idx]
+            idx += 1
+            if not token:
+                continue
+            if token.startswith("# "):
+                if token.startswith("# branch.oid "):
+                    oid = token.removeprefix("# branch.oid ").strip()
+                    head = "" if oid == "(initial)" else oid
+                elif token.startswith("# branch.head "):
+                    bname = token.removeprefix("# branch.head ").strip()
+                    branch = "HEAD" if bname == "(detached)" else bname
+                continue
+            if token.startswith("1 "):
+                parts = token.split(" ", 8)
+                if len(parts) == 9:
+                    xy = parts[1][:2].ljust(2)
+                    entries.append(f"{xy} {parts[8]}")
+            elif token.startswith("2 "):
+                parts = token.split(" ", 9)
+                if len(parts) == 10:
+                    xy = parts[1][:2].ljust(2)
+                    entries.append(f"{xy} {parts[9]}")
+                # Consume the trailing NUL-delimited <origPath> record
+                if idx < total:
+                    idx += 1
+            elif token.startswith("u "):
+                parts = token.split(" ", 10)
+                if len(parts) == 11:
+                    xy = parts[1][:2].ljust(2)
+                    entries.append(f"{xy} {parts[10]}")
+            elif token.startswith("? "):
+                entries.append(f"?? {token[2:]}")
+
+        return GitSnapshot(
+            is_git_repo=True,
+            branch=branch,
+            head=head,
+            dirty_entries=tuple(entries),
+        )
 
 
 class GitEvidenceMiddleware(AgentMiddleware):

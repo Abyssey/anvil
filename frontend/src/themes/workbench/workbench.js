@@ -467,8 +467,9 @@ export const workbenchTheme = {
       },
       "variant:muted": {
         "borderRadius": "10px",
-        "paddingBlock": "6px",
-        "paddingInline": "10px",
+        "paddingBlockStart": "5px",
+        "paddingBlockEnd": "8px",
+        "paddingInline": "12px",
         "--text-body-size": "0.8125rem",
         "--text-body-leading": "1.42",
         "--text-label-size": "0.8125rem",
@@ -481,7 +482,8 @@ export const workbenchTheme = {
         "--text-heading-6-size": "0.78125rem",
         "--text-heading-6-leading": "1.35",
         "--spacing-2": "0.3125rem",
-        "--spacing-3": "0.5rem"
+        "--spacing-3": "0.5rem",
+        "--spacing-4": "0.75rem"
       }
     },
     "section": {

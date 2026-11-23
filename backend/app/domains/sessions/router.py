@@ -196,12 +196,21 @@ async def revert_session_turn(
     return await service.revert_from_message(session_id, body.message_id)
 
 
+async def _validate_stream_dep(
+    session_id: str,
+    _creds: LLMCredentialsDep,
+    service: SessionServiceDep,
+) -> Session:
+    return await service.validate_stream_start(session_id)
+
+
 @router.post("/{session_id}/messages/stream", response_class=EventSourceResponse)
 async def stream_session_message(
     session_id: str,
     body: StreamMessageRequest,
     creds: LLMCredentialsDep,
     service: SessionServiceDep,
+    _validated: Annotated[Session, Depends(_validate_stream_dep)],
 ) -> AsyncIterable[ServerSentEvent]:
     async for ev in service.stream_message(
         session_id=session_id,

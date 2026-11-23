@@ -72,14 +72,15 @@ describe("SubagentGroupView", () => {
     ).toBeInTheDocument();
 
     // Collapsed by default when zero [Important] issues
-    expect(screen.queryByText("독립 코드 리뷰 결과")).not.toBeInTheDocument();
+    expect(screen.queryByText("리뷰 요약")).not.toBeInTheDocument();
 
-    // Expand card -> shows nested tool calls and formatted Markdown review report
+    // Expand card -> shows nested tool calls and formatted Markdown review report without duplicate kicker label
     fireEvent.click(
       screen.getByText("SQLite 저널 모드 및 ShellGuard 변경 사항 독립 리뷰"),
     );
     expect(screen.getByText("내부 도구 호출 (1)")).toBeInTheDocument();
-    expect(screen.getByText("독립 코드 리뷰 결과")).toBeInTheDocument();
+    expect(screen.queryByText("독립 코드 리뷰 결과")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "리뷰 요약" })).toBeInTheDocument();
     expect(screen.getByText(/주석 보강 가능/)).toBeInTheDocument();
   });
 

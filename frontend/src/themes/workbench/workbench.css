@@ -601,9 +601,10 @@
     --text-heading-6-leading: 1.35;
     --spacing-2: 0.3125rem;
     --spacing-3: 0.5rem;
-    --astryx-card-padding-inline: 10px;
-    --astryx-card-padding-block-start: 6px;
-    --astryx-card-padding-block-end: 6px;
+    --spacing-4: 0.75rem;
+    --astryx-card-padding-inline: 12px;
+    --astryx-card-padding-block-start: 5px;
+    --astryx-card-padding-block-end: 8px;
     --_card-radius: 10px;
     --_card-radius-top-left: 10px;
     --_card-radius-top-right: 10px;

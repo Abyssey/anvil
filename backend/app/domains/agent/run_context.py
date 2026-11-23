@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -48,7 +48,8 @@ class RunContext:
         try:
             yield catalog
         finally:
-            _CURRENT_RUN.reset(token)
+            with suppress(ValueError):
+                _CURRENT_RUN.reset(token)
 
     @staticmethod
     def current() -> RunCatalog:

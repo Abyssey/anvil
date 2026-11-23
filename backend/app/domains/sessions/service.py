@@ -126,6 +126,40 @@ class SessionService:
         self._harness = harness
         self._memory_store = ProjectMemoryStore(memories_root or config.memories_root)
         self._on_delete_session_thread = on_delete_session_thread
+        self._active_stream_sessions: set[str] = set()
+
+    async def recover_interrupted_runs(self) -> int:
+        """Reset stale RUNNING sessions left over from a prior crashed/restarted process."""
+        sessions = await self._repo.list_sessions()
+        recovered = 0
+        for sess in sessions:
+            if sess.status == SessionStatus.RUNNING and sess.id not in self._active_stream_sessions:
+                await self._repo.update_session(
+                    sess.model_copy(
+                        update={
+                            "status": SessionStatus.IDLE,
+                            "pending_interrupt": None,
+                        }
+                    )
+                )
+                recovered += 1
+        if recovered > 0:
+            logger.info(
+                "session.recovered_stale_runs",
+                extra={"event": "session.recovered_stale_runs", "count": recovered},
+            )
+        return recovered
+
+    async def validate_stream_start(self, session_id: str) -> Session:
+        """Pre-flight check before opening the SSE stream so concurrent runs return HTTP 409."""
+        session = await self._repo.get_session(session_id)
+        if session.id in self._active_stream_sessions:
+            raise DomainError(
+                "Session is already actively streaming. Wait for completion or stop it first.",
+                status_code=409,
+                code="SESSION_RUNNING",
+            )
+        return session
 
     async def list_projects(self) -> list[Project]:
         projects = await self._repo.list_projects()
@@ -416,66 +450,82 @@ class SessionService:
         creds: LLMCredentials,
         pinned_skills: list[str] | None = None,
     ) -> AsyncIterator[StreamEvent]:
-        session = await self._repo.get_session(session_id)
-        prior_history = [
-            (m.role, m.content) for m in await self._repo.list_messages(session.id)
-        ]
-        active_mode = mode or session.mode
-        next_title = (
-            content.strip().splitlines()[0][:60]
-            if session.title == "New Session" and content.strip()
-            else session.title
-        )
-        session = await self._repo.update_session(
-            session.model_copy(
-                update={
-                    "title": next_title,
-                    "mode": active_mode,
-                    "status": SessionStatus.RUNNING,
-                    "pending_interrupt": None,
-                }
+        session = await self.validate_stream_start(session_id)
+        self._active_stream_sessions.add(session.id)
+        try:
+            has_ckpt_fn = getattr(self._harness, "has_thread_checkpoint", None)
+            already_seeded = (
+                bool(await has_ckpt_fn(session.id)) if callable(has_ckpt_fn) else False
             )
-        )
-        await self._repo.append_message(
-            ChatMessage(
-                id=uuid.uuid4().hex[:12],
-                session_id=session.id,
-                role="user",
-                content=content,
-                created_at=datetime.now(UTC),
+            prior_history = (
+                []
+                if already_seeded
+                else [(m.role, m.content) for m in await self._repo.list_messages(session.id)]
             )
-        )
+            active_mode = mode or session.mode
+            next_title = (
+                content.strip().splitlines()[0][:60]
+                if session.title == "New Session" and content.strip()
+                else session.title
+            )
+            session = await self._repo.update_session(
+                session.model_copy(
+                    update={
+                        "title": next_title,
+                        "mode": active_mode,
+                        "status": SessionStatus.RUNNING,
+                        "pending_interrupt": None,
+                    }
+                )
+            )
+            await self._repo.append_message(
+                ChatMessage(
+                    id=uuid.uuid4().hex[:12],
+                    session_id=session.id,
+                    role="user",
+                    content=content,
+                    created_at=datetime.now(UTC),
+                )
+            )
 
-        with bind_log_context(
-            session_id=session.id,
-            mode=active_mode.value,
-            secrets=(creds.api_key,),
-        ):
-            extra_kwargs: dict[str, object] = {}
-            if prior_history and "prior_messages" in inspect.signature(
-                self._harness.stream_run
-            ).parameters:
-                extra_kwargs["prior_messages"] = prior_history
-            raw_stream = self._harness.stream_run(
+            with bind_log_context(
                 session_id=session.id,
-                workspace_path=Path(session.workspace_path),
                 mode=active_mode.value,
-                user_message=content,
-                creds=creds,
-                project_id=session.project_id or session.id,
-                pinned_skills=pinned_skills,
-                **extra_kwargs,  # type: ignore[arg-type]
-            )
-            async for ev in self._consume_and_persist_stream(
-                session,
-                raw_stream,
-                model=creds.model,
+                secrets=(creds.api_key,),
             ):
-                yield ev
+                extra_kwargs: dict[str, object] = {}
+                if prior_history and "prior_messages" in inspect.signature(
+                    self._harness.stream_run
+                ).parameters:
+                    extra_kwargs["prior_messages"] = prior_history
+                raw_stream = self._harness.stream_run(
+                    session_id=session.id,
+                    workspace_path=Path(session.workspace_path),
+                    mode=active_mode.value,
+                    user_message=content,
+                    creds=creds,
+                    project_id=session.project_id or session.id,
+                    pinned_skills=pinned_skills,
+                    **extra_kwargs,  # type: ignore[arg-type]
+                )
+                async for ev in self._consume_and_persist_stream(
+                    session,
+                    raw_stream,
+                    model=creds.model,
+                ):
+                    yield ev
+        finally:
+            self._active_stream_sessions.discard(session.id)
 
     async def validate_resume(self, session_id: str, decision: str) -> Session:
         """Pre-flight check before opening the SSE stream so errors return HTTP 4xx."""
         session = await self._repo.get_session(session_id)
+        if session.id in self._active_stream_sessions:
+            raise DomainError(
+                "Session is already actively streaming.",
+                status_code=409,
+                code="SESSION_RUNNING",
+            )
         pending = session.pending_interrupt
         if pending is None:
             raise InvalidInterruptResumeError()
@@ -499,56 +549,60 @@ class SessionService:
         answers: list[QuestionAnswer] | None = None,
     ) -> AsyncIterator[StreamEvent]:
         session = await self.validate_resume(session_id, decision)
-        pending = session.pending_interrupt
-        assert pending is not None
+        self._active_stream_sessions.add(session.id)
+        try:
+            pending = session.pending_interrupt
+            assert pending is not None
 
-        answer_list = list(answers or [])
-        if pending.kind == "user_question":
-            qa_summary = _format_qa_user_message(
-                pending.questions,
-                decision,
-                answer_list,
-                feedback,
-            )
-            await self._repo.append_message(
-                ChatMessage(
-                    id=uuid.uuid4().hex[:12],
-                    session_id=session.id,
-                    role="user",
-                    content=qa_summary,
-                    created_at=datetime.now(UTC),
+            answer_list = list(answers or [])
+            if pending.kind == "user_question":
+                qa_summary = _format_qa_user_message(
+                    pending.questions,
+                    decision,
+                    answer_list,
+                    feedback,
+                )
+                await self._repo.append_message(
+                    ChatMessage(
+                        id=uuid.uuid4().hex[:12],
+                        session_id=session.id,
+                        role="user",
+                        content=qa_summary,
+                        created_at=datetime.now(UTC),
+                    )
+                )
+
+            session = await self._repo.update_session(
+                session.model_copy(
+                    update={
+                        "status": SessionStatus.RUNNING,
+                        "pending_interrupt": None,
+                    }
                 )
             )
-
-        session = await self._repo.update_session(
-            session.model_copy(
-                update={
-                    "status": SessionStatus.RUNNING,
-                    "pending_interrupt": None,
-                }
-            )
-        )
-        with bind_log_context(
-            session_id=session.id,
-            mode=session.mode.value,
-            secrets=(creds.api_key,),
-        ):
-            raw_stream = self._harness.stream_resume(
+            with bind_log_context(
                 session_id=session.id,
-                workspace_path=Path(session.workspace_path),
                 mode=session.mode.value,
-                decision=decision,
-                feedback=feedback,
-                creds=creds,
-                project_id=session.project_id or session.id,
-                answers=[a.model_dump() for a in answer_list] if answer_list else None,
-            )
-            async for ev in self._consume_and_persist_stream(
-                session,
-                raw_stream,
-                model=creds.model,
+                secrets=(creds.api_key,),
             ):
-                yield ev
+                raw_stream = self._harness.stream_resume(
+                    session_id=session.id,
+                    workspace_path=Path(session.workspace_path),
+                    mode=session.mode.value,
+                    decision=decision,
+                    feedback=feedback,
+                    creds=creds,
+                    project_id=session.project_id or session.id,
+                    answers=[a.model_dump() for a in answer_list] if answer_list else None,
+                )
+                async for ev in self._consume_and_persist_stream(
+                    session,
+                    raw_stream,
+                    model=creds.model,
+                ):
+                    yield ev
+        finally:
+            self._active_stream_sessions.discard(session.id)
 
     async def _consume_and_persist_stream(
         self,
@@ -687,21 +741,38 @@ class SessionService:
             )
             raise
         finally:
-            next_status = await asyncio.shield(
-                self._finalize_stream(
+            async def _cleanup_and_persist() -> SessionStatus:
+                aclose_fn = getattr(raw_stream, "aclose", None)
+                if callable(aclose_fn):
+                    try:
+                        await aclose_fn()
+                    except (Exception, asyncio.CancelledError, GeneratorExit):
+                        logger.debug("sse.raw_stream_close_failed", exc_info=True)
+
+                resolved_cid = turn_checkpoint_id
+                resolved_changed = turn_changed_files
+                finalize_capture_fn = getattr(self._harness, "finalize_pending_capture", None)
+                if resolved_cid is None and callable(finalize_capture_fn):
+                    rec_cid, rec_changed = await finalize_capture_fn(session.id)
+                    if rec_cid is not None:
+                        resolved_cid = rec_cid
+                        resolved_changed = rec_changed
+
+                return await self._finalize_stream(
                     session=session,
                     thinking_parts=thinking_parts,
                     token_parts=token_parts,
                     tool_map=tool_map,
                     tool_order=tool_order,
                     pending_interrupt=pending_interrupt,
-                    checkpoint_id=turn_checkpoint_id,
-                    changed_files=turn_changed_files,
+                    checkpoint_id=resolved_cid,
+                    changed_files=resolved_changed,
                     verification_stamp=turn_verification_stamp,
                     had_error=had_error,
                     was_cancelled=was_cancelled,
                 )
-            )
+
+            next_status = await asyncio.shield(_cleanup_and_persist())
             logger.info(
                 "sse.complete",
                 extra={

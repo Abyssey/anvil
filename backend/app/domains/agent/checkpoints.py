@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import shutil
 import stat
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -15,6 +17,11 @@ from pathlib import Path
 from typing import TypedDict
 
 from backend.app.shared.errors import DomainError, InvalidWorkspaceError, PathEscapeError
+
+logger = logging.getLogger(__name__)
+
+FileStatStamp = tuple[int, int, int, int]
+_RACY_WINDOW_NS = 2_000_000_000
 
 _IGNORED_NAMES: frozenset[str] = frozenset(
     {
@@ -76,19 +83,25 @@ class CheckpointCapture:
     session_id: str
     workspace_path: Path
     _baseline_hashes: dict[str, tuple[str, int]] = field(default_factory=dict)
+    _baseline_stats: dict[str, FileStatStamp] = field(default_factory=dict)
+    _baseline_started_ns: int = 0
     _extra_pre_write: dict[str, BaselineEntry] = field(default_factory=dict)
     _captured: bool = False
+    _finalized: bool = False
     checkpoint_id: str | None = None
     changed_files: list[str] = field(default_factory=list)
 
     async def capture_baseline(self) -> None:
         if self._captured:
             return
-        self._baseline_hashes = await asyncio.to_thread(
-            self.store.scan_and_store_blobs,
+        hashes, stats, started_ns = await asyncio.to_thread(
+            self.store.scan_baseline_with_stats,
             self.session_id,
             self.workspace_path,
         )
+        self._baseline_hashes = hashes
+        self._baseline_stats = stats
+        self._baseline_started_ns = started_ns
         self._captured = True
 
     async def snapshot_before_write(self, virtual_or_rel_path: str) -> None:
@@ -107,7 +120,10 @@ class CheckpointCapture:
             self._extra_pre_write[clean] = entry
 
     async def finalize(self) -> tuple[str | None, list[str]]:
+        if self._finalized:
+            return self.checkpoint_id, list(self.changed_files)
         if not self._captured and not self._extra_pre_write:
+            self._finalized = True
             return None, []
         cid, changed = await asyncio.to_thread(
             self.store.finalize_turn_sync,
@@ -115,9 +131,12 @@ class CheckpointCapture:
             self.workspace_path,
             self._baseline_hashes,
             self._extra_pre_write,
+            self._baseline_stats,
+            self._baseline_started_ns,
         )
         self.checkpoint_id = cid
         self.changed_files = changed
+        self._finalized = True
         return cid, changed
 
 
@@ -191,16 +210,18 @@ class TurnCheckpointStore:
             mode=stat.S_IMODE(st.st_mode),
         )
 
-    def scan_and_store_blobs(
+    def scan_baseline_with_stats(
         self,
         session_id: str,
         workspace_path: Path,
-    ) -> dict[str, tuple[str, int]]:
+    ) -> tuple[dict[str, tuple[str, int]], dict[str, FileStatStamp], int]:
+        started_ns = time.time_ns()
         root = workspace_path.resolve()
         if not root.is_dir():
-            return {}
+            return {}, {}, started_ns
         blobs_dir = self.session_dir(session_id) / "blobs"
         manifest: dict[str, tuple[str, int]] = {}
+        stats: dict[str, FileStatStamp] = {}
         scanned = 0
 
         for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
@@ -213,7 +234,15 @@ class TurnCheckpointStore:
                 if fname in _IGNORED_NAMES:
                     continue
                 if scanned >= _MAX_SCANNED_FILES:
-                    return manifest
+                    logger.warning(
+                        "checkpoint.scan_limit_reached",
+                        extra={
+                            "event": "checkpoint.scan_limit_reached",
+                            "session_id": session_id,
+                            "limit": _MAX_SCANNED_FILES,
+                        },
+                    )
+                    return manifest, stats, started_ns
                 full = Path(dirpath) / fname
                 if full.is_symlink():
                     continue
@@ -227,15 +256,35 @@ class TurnCheckpointStore:
                 rel = full.relative_to(root).as_posix()
                 digest = self._write_blob(blobs_dir, raw)
                 manifest[rel] = (digest, stat.S_IMODE(st.st_mode))
+                stats[rel] = (st.st_mtime_ns, st.st_ctime_ns, st.st_size, st.st_ino)
                 scanned += 1
+        return manifest, stats, started_ns
+
+    def scan_and_store_blobs(
+        self,
+        session_id: str,
+        workspace_path: Path,
+    ) -> dict[str, tuple[str, int]]:
+        manifest, _, _ = self.scan_baseline_with_stats(session_id, workspace_path)
         return manifest
 
-    def _scan_hashes_only(self, workspace_path: Path) -> dict[str, str]:
+    def _scan_hashes_only(
+        self,
+        workspace_path: Path,
+        *,
+        session_id: str = "",
+        baseline_hashes: dict[str, tuple[str, int]] | None = None,
+        baseline_stats: dict[str, FileStatStamp] | None = None,
+        baseline_started_ns: int = 0,
+    ) -> dict[str, str]:
         root = workspace_path.resolve()
         if not root.is_dir():
             return {}
         hashes: dict[str, str] = {}
         scanned = 0
+        safe_cutoff_ns = (
+            baseline_started_ns - _RACY_WINDOW_NS if baseline_started_ns > _RACY_WINDOW_NS else 0
+        )
         for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
             dirnames[:] = sorted(
                 d
@@ -246,6 +295,14 @@ class TurnCheckpointStore:
                 if fname in _IGNORED_NAMES:
                     continue
                 if scanned >= _MAX_SCANNED_FILES:
+                    logger.warning(
+                        "checkpoint.scan_limit_reached",
+                        extra={
+                            "event": "checkpoint.scan_limit_reached",
+                            "session_id": session_id,
+                            "limit": _MAX_SCANNED_FILES,
+                        },
+                    )
                     return hashes
                 full = Path(dirpath) / fname
                 if full.is_symlink():
@@ -254,10 +311,27 @@ class TurnCheckpointStore:
                     st = full.stat()
                     if not stat.S_ISREG(st.st_mode) or st.st_size > _MAX_SNAPSHOT_FILE_BYTES:
                         continue
+                    rel = full.relative_to(root).as_posix()
+                    cur_stamp: FileStatStamp = (
+                        st.st_mtime_ns,
+                        st.st_ctime_ns,
+                        st.st_size,
+                        st.st_ino,
+                    )
+                    if (
+                        safe_cutoff_ns > 0
+                        and baseline_hashes is not None
+                        and baseline_stats is not None
+                        and rel in baseline_hashes
+                        and baseline_stats.get(rel) == cur_stamp
+                        and st.st_mtime_ns < safe_cutoff_ns
+                    ):
+                        hashes[rel] = baseline_hashes[rel][0]
+                        scanned += 1
+                        continue
                     raw = full.read_bytes()
                 except OSError:
                     continue
-                rel = full.relative_to(root).as_posix()
                 hashes[rel] = hashlib.sha256(raw).hexdigest()
                 scanned += 1
         return hashes
@@ -268,9 +342,17 @@ class TurnCheckpointStore:
         workspace_path: Path,
         baseline_hashes: dict[str, tuple[str, int]],
         extra_pre_write: dict[str, BaselineEntry],
+        baseline_stats: dict[str, FileStatStamp] | None = None,
+        baseline_started_ns: int = 0,
     ) -> tuple[str | None, list[str]]:
         root = workspace_path.resolve()
-        current_hashes = self._scan_hashes_only(root)
+        current_hashes = self._scan_hashes_only(
+            root,
+            session_id=session_id,
+            baseline_hashes=baseline_hashes,
+            baseline_stats=baseline_stats,
+            baseline_started_ns=baseline_started_ns,
+        )
 
         candidate_paths = set(baseline_hashes.keys()) | set(current_hashes.keys()) | set(
             extra_pre_write.keys()

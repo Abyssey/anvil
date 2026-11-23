@@ -20,7 +20,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 
-from backend.app.domains.agent.checkpoints import TurnCheckpointStore
+from backend.app.domains.agent.checkpoints import CheckpointCapture, TurnCheckpointStore
 from backend.app.domains.agent.middleware.git_evidence import (
     GitEvidenceMiddleware,
     GitEvidenceTracker,
@@ -125,9 +125,11 @@ class DeepAgentHarness:
         self._subdir_agents_by_key: dict[tuple[str, str], SubdirAgentsReadMiddleware] = {}
         self._shell_guard = ShellGuard()
         self._checkpoint_store = TurnCheckpointStore(config.checkpoints_root)
+        self._active_captures: dict[str, CheckpointCapture] = {}
 
     async def reset_thread(self, session_id: str) -> None:
         """Reset LangGraph thread state and middleware caches while keeping file checkpoints."""
+        self._active_captures.pop(session_id, None)
         for mw in self._subdir_agents_by_key.values():
             mw.clear_session(session_id)
         if self._checkpointer is not None and hasattr(self._checkpointer, "adelete_thread"):
@@ -137,6 +139,13 @@ class DeepAgentHarness:
                 if inspect.isawaitable(maybe_coro):
                     await maybe_coro
             await self._checkpointer.adelete_thread(session_id)
+
+    async def finalize_pending_capture(self, session_id: str) -> tuple[str | None, list[str]]:
+        """Finalize and detach an in-flight checkpoint capture (e.g. after client stream abort)."""
+        capture = self._active_captures.pop(session_id, None)
+        if capture is None:
+            return None, []
+        return await capture.finalize()
 
     async def delete_thread(self, session_id: str) -> None:
         """Delete LangGraph checkpoints, caches, and turn file snapshots for a session."""
@@ -158,7 +167,7 @@ class DeepAgentHarness:
         await self.reset_thread(session_id)
         return reverted_files
 
-    async def _has_thread_checkpoint(self, session_id: str) -> bool:
+    async def has_thread_checkpoint(self, session_id: str) -> bool:
         if self._checkpointer is None or not hasattr(self._checkpointer, "aget_tuple"):
             return False
         setup_fn = getattr(self._checkpointer, "setup", None)
@@ -168,6 +177,8 @@ class DeepAgentHarness:
                 await maybe_coro
         existing = await self._checkpointer.aget_tuple({"configurable": {"thread_id": session_id}})
         return existing is not None
+
+    _has_thread_checkpoint = has_thread_checkpoint
 
     def _get_or_build_graph(
         self,
@@ -386,6 +397,9 @@ class DeepAgentHarness:
                 return only_name, only_id
             return _subagent_name(ns), None
 
+        if catalog.checkpoint_capture is not None:
+            self._active_captures[catalog.session_id] = catalog.checkpoint_capture
+
         async with RunContext.activate(catalog):
             try:
                 async for item in graph.astream(
@@ -476,6 +490,7 @@ class DeepAgentHarness:
                     },
                 )
                 if catalog.checkpoint_capture is not None:
+                    self._active_captures.pop(catalog.session_id, None)
                     err_cid, err_changed = await catalog.checkpoint_capture.finalize()
                     if err_cid is not None:
                         yield HarnessEvent(
@@ -503,6 +518,7 @@ class DeepAgentHarness:
         checkpoint_id: str | None = None
         checkpoint_changed: list[str] = []
         if catalog.checkpoint_capture is not None:
+            self._active_captures.pop(catalog.session_id, None)
             checkpoint_id, checkpoint_changed = await catalog.checkpoint_capture.finalize()
 
         verification_stamp = (

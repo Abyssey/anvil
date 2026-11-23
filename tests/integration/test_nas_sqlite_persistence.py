@@ -1,4 +1,4 @@
-"""Integration tests for DATA_DIR & SQLITE_JOURNAL_MODE (local WAL vs AWX NAS DELETE)."""
+"""Integration tests for DATA_DIR & SQLITE_JOURNAL_MODE (local WAL vs shared-volume DELETE)."""
 
 from __future__ import annotations
 
@@ -70,13 +70,13 @@ def _init_git_repo(repo: Path) -> None:
     repo.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
     subprocess.run(
-        ["git", "config", "user.email", "awx@example.com"],
+        ["git", "config", "user.email", "nas-test@example.com"],
         cwd=repo,
         check=True,
         capture_output=True,
     )
     subprocess.run(
-        ["git", "config", "user.name", "AWX Runner"],
+        ["git", "config", "user.name", "NAS Runner"],
         cwd=repo,
         check=True,
         capture_output=True,
@@ -116,11 +116,11 @@ def test_default_env_uses_repo_dot_data_and_wal(
         assert _read_sqlite_journal_mode(cfg.sqlite_path) == "wal"
 
 
-def test_awx_nas_delete_journal_mode_pod_restart_and_checkpoint_recovery(
+def test_shared_volume_delete_journal_mode_restart_and_checkpoint_recovery(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    nas_dir = (tmp_path / "mnt" / "awx-nas" / "anvil-state").resolve()
+    nas_dir = (tmp_path / "mnt" / "shared-nas" / "agent-state").resolve()
     workspace = tmp_path / "workspace-repo"
     _init_git_repo(workspace)
 
@@ -166,7 +166,7 @@ def test_awx_nas_delete_journal_mode_pod_restart_and_checkpoint_recovery(
                         "name": "write_file",
                         "args": {
                             "file_path": "/artifacts/walkthrough.md",
-                            "content": "# Walkthrough\nUpgraded version() to 2.0 on AWX NAS.",
+                            "content": "# Walkthrough\nUpgraded version() to 2.0 on shared NAS.",
                         },
                     }
                 ]
@@ -215,7 +215,7 @@ def test_awx_nas_delete_journal_mode_pod_restart_and_checkpoint_recovery(
         tables = _read_sqlite_tables(db_file)
         assert {"projects", "sessions", "messages", "checkpoints", "writes"}.issubset(tables)
 
-    # Simulate AWX Pod replacement: fresh FastAPI app reading the same NAS DATA_DIR
+    # Simulate container replacement: fresh FastAPI app reading the same shared DATA_DIR
     app_pod_2 = create_app(model_factory=_FakeModelFactory(model))
     with TestClient(app_pod_2) as client2:
         projects = client2.get("/api/projects").json()

@@ -154,10 +154,40 @@ class ReasoningChatOpenAI(ChatOpenAI):
 
 
 class ModelFactory:
-    """Constructs OpenAI-compatible chat models and checks endpoint health."""
+    """Constructs OpenAI-compatible chat models sharing one managed httpx pool."""
 
     def __init__(self, *, http_transport: httpx.AsyncBaseTransport | None = None) -> None:
         self._http_transport = http_transport
+        self._sync_client: httpx.Client | None = None
+        self._async_client: httpx.AsyncClient | None = None
+
+    def _get_sync_client(self) -> httpx.Client:
+        existing: httpx.Client | None = getattr(self, "_sync_client", None)
+        if existing is None or existing.is_closed:
+            existing = httpx.Client(trust_env=False, timeout=120.0)
+            self._sync_client = existing
+        return existing
+
+    def _get_async_client(self) -> httpx.AsyncClient:
+        existing: httpx.AsyncClient | None = getattr(self, "_async_client", None)
+        if existing is None or existing.is_closed:
+            transport: httpx.AsyncBaseTransport | None = getattr(self, "_http_transport", None)
+            existing = httpx.AsyncClient(
+                transport=transport,
+                trust_env=False,
+                timeout=120.0,
+            )
+            self._async_client = existing
+        return existing
+
+    async def aclose(self) -> None:
+        """Close pooled HTTP clients cleanly during application shutdown."""
+        async_client: httpx.AsyncClient | None = getattr(self, "_async_client", None)
+        if async_client is not None and not async_client.is_closed:
+            await async_client.aclose()
+        sync_client: httpx.Client | None = getattr(self, "_sync_client", None)
+        if sync_client is not None and not sync_client.is_closed:
+            sync_client.close()
 
     def build(self, creds: LLMCredentials) -> BaseChatModel:
         extra_body: dict[str, Any] | None = (
@@ -170,31 +200,28 @@ class ModelFactory:
             max_retries=0,
             streaming=True,
             extra_body=extra_body,
-            http_client=httpx.Client(trust_env=False, timeout=120.0),
-            http_async_client=httpx.AsyncClient(trust_env=False, timeout=120.0),
+            http_client=self._get_sync_client(),
+            http_async_client=self._get_async_client(),
         )
 
     async def ping_llm(self, creds: LLMCredentials) -> dict[str, object]:
         """Verify OpenAI-compatible endpoint reachability without logging credentials."""
         models_url = f"{creds.base_url}/models"
         headers = {"Authorization": f"Bearer {creds.api_key}"}
+        client = self._get_async_client()
         try:
-            async with httpx.AsyncClient(
-                transport=self._http_transport,
-                trust_env=False,
-                timeout=10.0,
-            ) as client:
-                resp = await client.get(models_url, headers=headers)
-                if resp.status_code in {404, 405}:
-                    resp = await client.post(
-                        f"{creds.base_url}/chat/completions",
-                        headers=headers,
-                        json={
-                            "model": creds.model,
-                            "messages": [{"role": "user", "content": "ping"}],
-                            "max_tokens": 1,
-                        },
-                    )
+            resp = await client.get(models_url, headers=headers, timeout=10.0)
+            if resp.status_code in {404, 405}:
+                resp = await client.post(
+                    f"{creds.base_url}/chat/completions",
+                    headers=headers,
+                    json={
+                        "model": creds.model,
+                        "messages": [{"role": "user", "content": "ping"}],
+                        "max_tokens": 1,
+                    },
+                    timeout=10.0,
+                )
         except httpx.HTTPError as exc:
             msg = creds.redact_secrets(
                 f"Failed to connect to {creds.base_url}: {type(exc).__name__}"

@@ -80,6 +80,7 @@ def create_app(
                 memories_root=app_config.memories_root,
                 on_delete_session_thread=harness.delete_thread,
             )
+            await session_service.recover_interrupted_runs()
             fastapi_app.state.container = AppContainer(
                 config=app_config,
                 session_repo=session_repo,
@@ -104,6 +105,7 @@ def create_app(
             try:
                 yield
             finally:
+                await resolved_model_factory.aclose()
                 logger.info("app.shutdown", extra={"event": "app.shutdown"})
 
     fastapi_app = FastAPI(

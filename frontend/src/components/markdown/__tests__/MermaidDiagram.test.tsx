@@ -4,6 +4,8 @@ import { Theme } from "@astryxdesign/core/theme";
 import { afterEach, describe, expect, it } from "vitest";
 import { defaultThemeSlug, themes } from "../../../astryx-themes";
 import {
+  measureGlyphFloorWidth,
+  normalizeMermaidSourceForRender,
   renderMermaidSafe,
   sanitizeMermaidSvgToFragment,
 } from "../../../utils/mermaidRenderer";
@@ -74,6 +76,54 @@ describe("mermaidRenderer sanitization and auto-fix", () => {
       expect(result.fixCount).toBeGreaterThanOrEqual(2);
       expect(result.svg).toContain("\u003csvg");
       expect(result.diagramType).toBe("flowchart");
+      expect(result.width).toBeGreaterThan(80);
+      expect(result.height).toBeGreaterThan(80);
+    }
+  });
+
+  it("measures Korean subgraph headers and strips sequence participant outer quotes", async () => {
+    expect(measureGlyphFloorWidth("", 14, 0)).toBe(0);
+    expect(measureGlyphFloorWidth("프롬프트", 14, 0)).toBeGreaterThan(
+      measureGlyphFloorWidth("abcd", 14, 0),
+    );
+
+    const koreanFlowchart = [
+      "flowchart TD",
+      '  REQ["모델 호출 / 도구 실행 요청"]',
+      '  subgraph SG["프롬프트-기억 계층 (awrap_model_call / before_agent)"]',
+      '    M1["1. TodoListMiddleware\\nwrite_todos 상태 관리"]',
+      "  end",
+      "  REQ --> M1",
+    ].join("\n");
+
+    const flowResult = await renderMermaidSafe(koreanFlowchart);
+    expect(flowResult.ok).toBe(true);
+    if (flowResult.ok) {
+      expect(flowResult.width).toBeGreaterThanOrEqual(450);
+      const fragment = sanitizeMermaidSvgToFragment(flowResult.svg);
+      const clusterRect = fragment.querySelector(
+        'g.pele-cluster[data-id="SG"] > rect',
+      );
+      const clusterWidth = Number(clusterRect?.getAttribute("width") ?? "0");
+      expect(clusterWidth).toBeGreaterThanOrEqual(420);
+    }
+
+    const quotedSequence = [
+      "sequenceDiagram",
+      '  participant UI as "사용자 UI (Composer)"',
+      '  participant R as "sessions/router.py (SSE)"',
+      "  UI->>R: stream_message",
+    ].join("\n");
+
+    expect(normalizeMermaidSourceForRender(quotedSequence)).toContain(
+      "participant UI as 사용자 UI (Composer)",
+    );
+
+    const seqResult = await renderMermaidSafe(quotedSequence);
+    expect(seqResult.ok).toBe(true);
+    if (seqResult.ok) {
+      expect(seqResult.svg).toContain("사용자 UI (Composer)");
+      expect(seqResult.svg).not.toContain("&quot;사용자 UI (Composer)&quot;");
     }
   });
 });
@@ -175,5 +225,75 @@ describe("MermaidDiagram and Astryx Markdown integration", () => {
 
     expect(screen.getByText(/Could not render Mermaid diagram:/i)).toBeInTheDocument();
     expect(screen.getByText(/notADiagramType/)).toBeInTheDocument();
+  });
+
+  it("renders Copy/Expand as IconButtons, opens Expanded view at Fit, and zooms via mouse wheel + Reset", async () => {
+    const wideSequence = [
+      "sequenceDiagram",
+      "  autonumber",
+      '  participant UI as "사용자 UI (Composer)"',
+      '  participant R as "sessions/router.py (SSE)"',
+      '  participant S as "SessionService"',
+      '  participant H as "DeepAgentHarness"',
+      '  participant LG as "LangGraph (LRU 캐시)"',
+      '  participant FS as "워크스페이스 / .data"',
+      "  UI->>R: POST /api/sessions/{id}/messages/stream + X-LLM-* 헤더",
+      "  R->>S: stream_message(...)",
+      "  S->>H: stream_run(mode, creds, prior_messages)",
+      "  LG->>FS: ls / read_file / write_file / execute",
+    ].join("\n");
+
+    const { container } = renderWithTheme(<MermaidDiagram code={wideSequence} />);
+
+    await waitFor(() => {
+      expect(container.querySelector("svg.pele")).not.toBeNull();
+    });
+
+    const copyBtn = screen.getByRole("button", { name: "Copy" });
+    const expandBtn = screen.getByRole("button", { name: "Expand" });
+    expect(copyBtn.textContent?.trim()).toBe("");
+    expect(expandBtn.textContent?.trim()).toBe("");
+
+    const inlineSvg = container.querySelector("svg.pele") as SVGSVGElement | null;
+    expect(inlineSvg).not.toBeNull();
+    expect(inlineSvg?.style.minWidth).toBe("");
+    const naturalWidth = Number.parseInt(inlineSvg?.style.maxWidth ?? "0", 10);
+    expect(naturalWidth).toBeGreaterThan(1200);
+
+    fireEvent.click(expandBtn);
+
+    let fitVbWidth = 0;
+    await waitFor(() => {
+      const dialogSvg = container.querySelector("dialog[open] svg.pele");
+      expect(dialogSvg).not.toBeNull();
+      const vb = (dialogSvg?.getAttribute("viewBox") ?? "").split(/\s+/).map(Number);
+      fitVbWidth = vb[2] ?? 0;
+      expect(fitVbWidth).toBeGreaterThanOrEqual(naturalWidth * 0.99);
+    });
+
+    // At initial Fit, no Reset zoom button or +/- button clutter is shown
+    expect(screen.queryByRole("button", { name: "Reset zoom" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Zoom in" })).toBeNull();
+
+    const dialogSvg = container.querySelector("dialog[open] svg.pele")!;
+    const stageHost = dialogSvg.parentElement!;
+
+    // Mouse wheel scroll zooms in around cursor (viewBox width shrinks) and shows Reset zoom IconButton
+    fireEvent.wheel(stageHost, { deltaY: -120, clientX: 400, clientY: 250 });
+
+    await waitFor(() => {
+      const vb = (dialogSvg.getAttribute("viewBox") ?? "").split(/\s+/).map(Number);
+      const zoomedVbWidth = vb[2] ?? 0;
+      expect(zoomedVbWidth).toBeLessThan(fitVbWidth);
+      expect(screen.getByRole("button", { name: "Reset zoom" })).toBeInTheDocument();
+    });
+
+    // Clicking Reset zoom restores full Fit viewBox and hides Reset zoom IconButton
+    fireEvent.click(screen.getByRole("button", { name: "Reset zoom" }));
+    await waitFor(() => {
+      const vb = (dialogSvg.getAttribute("viewBox") ?? "").split(/\s+/).map(Number);
+      expect(vb[2]).toBeCloseTo(fitVbWidth, 1);
+      expect(screen.queryByRole("button", { name: "Reset zoom" })).toBeNull();
+    });
   });
 });

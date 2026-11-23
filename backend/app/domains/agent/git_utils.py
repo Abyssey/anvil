@@ -9,7 +9,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-async def run_git(cwd: Path, *args: str) -> str:
+async def run_git(cwd: Path, *args: str, strip_output: bool = True) -> str:
     """Execute a read-only git command asynchronously, logging non-zero stderr at DEBUG."""
     proc = await asyncio.create_subprocess_exec(
         "git",
@@ -32,4 +32,5 @@ async def run_git(cwd: Path, *args: str) -> str:
                 },
             )
         return ""
-    return stdout.decode("utf-8", errors="replace").strip()
+    decoded = stdout.decode("utf-8", errors="replace")
+    return decoded.strip() if strip_output else decoded
