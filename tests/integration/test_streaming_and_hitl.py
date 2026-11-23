@@ -679,3 +679,88 @@ def test_message_history_cursor_pagination_preserves_order_and_has_more(tmp_path
         ids_2 = [m["id"] for m in page2["messages"]]
         assert ids_2 == [f"msg-{i:02d}" for i in range(1, 16)]
         assert ids_2 + ids_1 == [f"msg-{i:02d}" for i in range(1, 36)]
+
+
+def test_parallel_subagents_stream_and_persist_parent_linkage_and_durations(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo"
+    _init_workspace(workspace)
+    cfg = AppConfig.for_data_dir(tmp_path / ".data", default_workspace_path=workspace)
+
+    model = ScriptedReasoningChatModel(
+        turns=[
+            ScriptedTurn(
+                tool_calls=[
+                    {
+                        "name": "task",
+                        "args": {
+                            "subagent_type": "explorer",
+                            "description": "Map repository structure",
+                        },
+                    },
+                    {
+                        "name": "task",
+                        "args": {
+                            "subagent_type": "reviewer",
+                            "description": "Audit app.py for regressions",
+                        },
+                    },
+                ]
+            ),
+            ScriptedTurn(tool_calls=[{"name": "ls", "args": {"path": "/"}}]),
+            ScriptedTurn(tool_calls=[{"name": "read_file", "args": {"file_path": "/app.py"}}]),
+            ScriptedTurn(content="루트 디렉터리 구조를 매핑했습니다."),
+            ScriptedTurn(content="[Nit] `app.py`: greet() 반환 문자열 상수화 권장"),
+            ScriptedTurn(content="병렬 탐색 및 독립 코드 리뷰를 완료했습니다."),
+        ]
+    )
+
+    app = create_app(config=cfg, model_factory=_FakeModelFactory(model))
+    with TestClient(app) as client:
+        sid = client.post(
+            "/api/sessions",
+            json={"workspace_path": str(workspace), "mode": "auto"},
+        ).json()["id"]
+
+        resp = client.post(
+            f"/api/sessions/{sid}/messages/stream",
+            json={"content": "구조 탐색과 코드 리뷰를 동시에 진행해줘", "mode": "auto"},
+            headers=_headers(),
+        )
+        assert resp.status_code == 200
+        events = _parse_sse(resp.text)
+
+        task_starts = {
+            str(d["id"]): str((d.get("args") or {}).get("subagent_type"))  # type: ignore[union-attr]
+            for name, d in events
+            if name == "tool_start" and d.get("name") == "task"
+        }
+        assert set(task_starts.values()) == {"explorer", "reviewer"}
+
+        child_starts = [
+            d
+            for name, d in events
+            if name == "tool_start" and d.get("name") in {"ls", "read_file"}
+        ]
+        assert len(child_starts) == 2
+        for child in child_starts:
+            parent_id = str(child.get("parent_id") or "")
+            assert parent_id in task_starts
+            assert child.get("subagent") == task_starts[parent_id]
+            assert child.get("subagent") != "tools"
+
+        detail = client.get(f"/api/sessions/{sid}").json()
+        assistant = [m for m in detail["messages"] if m["role"] == "assistant"][-1]
+        saved_tools = assistant["tool_calls"]
+        saved_tasks = {tc["id"]: tc for tc in saved_tools if tc["name"] == "task"}
+        assert len(saved_tasks) == 2
+        for tc in saved_tasks.values():
+            assert isinstance(tc["duration_ms"], int) and tc["duration_ms"] >= 0
+            assert tc["output"]
+
+        saved_children = [tc for tc in saved_tools if tc["name"] != "task"]
+        assert len(saved_children) == 2
+        for child in saved_children:
+            assert child["parent_id"] in saved_tasks
+            assert child["subagent"] in {"explorer", "reviewer"}

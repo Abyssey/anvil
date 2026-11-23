@@ -20,7 +20,43 @@ export interface SingleToolBlock {
   call: ToolCallRecord;
 }
 
-export type GroupedToolBlock = ExplorationGroupBlock | SingleToolBlock;
+export type SubagentRole = "explorer" | "reviewer" | "general";
+export type SubagentStatus = "running" | "completed" | "error";
+
+export interface ReviewFindingCounts {
+  important: number;
+  nit: number;
+  preExisting: number;
+}
+
+export interface SubagentRunItem {
+  id: string;
+  taskCall: ToolCallRecord;
+  subagentType: string;
+  role: SubagentRole;
+  roleLabel: string;
+  description: string;
+  status: SubagentStatus;
+  nestedCalls: readonly ToolCallRecord[];
+  activeLabel: string;
+  summaryLabel: string;
+  output: string;
+  durationMs: number | null;
+  findingCounts: ReviewFindingCounts | null;
+}
+
+export interface SubagentGroupBlock {
+  kind: "subagent_group";
+  id: string;
+  items: readonly SubagentRunItem[];
+  isParallel: boolean;
+  runningCount: number;
+}
+
+export type GroupedToolBlock =
+  | ExplorationGroupBlock
+  | SubagentGroupBlock
+  | SingleToolBlock;
 
 export interface GroupToolCallsOptions {
   isStreaming: boolean;
@@ -199,6 +235,112 @@ function stableCallToken(call: ToolCallRecord, index: number): string {
   return trimmedId.length > 0 ? trimmedId : `${normalizeToolName(call.name) || "tool"}-${index}`;
 }
 
+export function parseReviewFindingCounts(output: string): ReviewFindingCounts {
+  const important = (output.match(/\[\s*important\s*\]/gi) ?? []).length;
+  const nit = (output.match(/\[\s*nit\s*\]/gi) ?? []).length;
+  const preExisting = (output.match(/\[\s*pre-existing\s*\]/gi) ?? []).length;
+  return { important, nit, preExisting };
+}
+
+function classifySubagentRole(rawType: string): { role: SubagentRole; roleLabel: string } {
+  const lowered = rawType.trim().toLowerCase();
+  if (lowered === "reviewer") {
+    return { role: "reviewer", roleLabel: "Code Reviewer" };
+  }
+  if (lowered === "explorer") {
+    return { role: "explorer", roleLabel: "Explorer" };
+  }
+  const clean = rawType.trim();
+  return {
+    role: "general",
+    roleLabel: clean.length > 0 ? clean : "Subagent",
+  };
+}
+
+function summarizeTaskDescription(rawDesc: string | undefined, role: SubagentRole): string {
+  if (!rawDesc || !rawDesc.trim()) {
+    if (role === "reviewer") return "독립 코드 리뷰 수행";
+    if (role === "explorer") return "코드베이스 탐색 수행";
+    return "위임 작업 수행";
+  }
+  const firstLine =
+    rawDesc
+      .split(/\r?\n/)
+      .map((line) => line.replace(/^#+\s*/, "").trim())
+      .find((line) => line.length > 0) ?? rawDesc.trim();
+  return truncateConcise(firstLine, 84);
+}
+
+function buildSubagentRunItem(
+  taskCall: ToolCallRecord,
+  taskIndex: number,
+  nestedCalls: readonly ToolCallRecord[],
+  options: GroupToolCallsOptions,
+  prefix: string,
+): SubagentRunItem {
+  const rawType =
+    firstNonEmptyString(taskCall.args, ["subagent_type", "agent", "type"]) ?? "subagent";
+  const { role, roleLabel } = classifySubagentRole(rawType);
+  const rawDesc = firstNonEmptyString(taskCall.args, ["description", "prompt", "task"]);
+  const description = summarizeTaskDescription(rawDesc, role);
+
+  const isError = taskCall.status === "error" || taskCall.status === "cancelled";
+  const isRunning =
+    options.isStreaming && (isCallInProgress(taskCall) || nestedCalls.some(isCallInProgress));
+  const status: SubagentStatus = isError ? "error" : isRunning ? "running" : "completed";
+
+  const durationMs =
+    typeof taskCall.duration_ms === "number" &&
+    Number.isFinite(taskCall.duration_ms) &&
+    taskCall.duration_ms >= 0
+      ? taskCall.duration_ms
+      : null;
+
+  let activeLabel: string;
+  if (nestedCalls.length > 0) {
+    activeLabel = `${formatExplorationLiveStatus(nestedCalls)} · 도구 ${nestedCalls.length}회 호출`;
+  } else if (role === "reviewer") {
+    activeLabel = "독립 컨텍스트에서 변경 코드 검토 중...";
+  } else if (role === "explorer") {
+    activeLabel = "독립 컨텍스트에서 코드베이스 탐색 중...";
+  } else {
+    activeLabel = "독립 컨텍스트에서 작업 수행 중...";
+  }
+
+  let toolClause = "도구 호출 없음";
+  if (nestedCalls.length > 0) {
+    const expCalls = nestedCalls.filter((c) => isReadExplorationTool(c.name));
+    if (expCalls.length > 0) {
+      toolClause = `도구 ${nestedCalls.length}회 사용 (${formatExplorationSummary(expCalls)})`;
+    } else {
+      toolClause = `도구 ${nestedCalls.length}회 사용`;
+    }
+  }
+  const durationClause = durationMs !== null ? ` · ${formatCompactDuration(durationMs)}` : "";
+  const summaryPrefix = status === "error" ? "실패" : "완료";
+  const summaryLabel = `${summaryPrefix} · ${toolClause}${durationClause}`;
+
+  const output = taskCall.output ?? "";
+  const findingCounts =
+    role === "reviewer" && output.trim().length > 0 ? parseReviewFindingCounts(output) : null;
+
+  return {
+    id: `${prefix}:subagent-item:${taskIndex}:${stableCallToken(taskCall, taskIndex)}`,
+    taskCall,
+    subagentType: rawType,
+    role,
+    roleLabel,
+    description,
+    status,
+    nestedCalls,
+    activeLabel,
+    summaryLabel,
+    output,
+    durationMs,
+    findingCounts,
+  };
+}
+
 export function groupToolCalls(
   records: readonly ToolCallRecord[],
   options: GroupToolCallsOptions,
@@ -211,8 +353,56 @@ export function groupToolCalls(
   const splitSet = new Set<number>(options.textSplitIndices ?? []);
   const blocks: GroupedToolBlock[] = [];
 
+  const taskIndices: number[] = [];
+  const taskIndexById = new Map<string, number>();
+  for (let i = 0; i < records.length; i += 1) {
+    const call = records[i];
+    if (normalizeToolName(call.name) === "task" && !call.parent_id) {
+      taskIndices.push(i);
+      if (call.id.trim().length > 0) {
+        taskIndexById.set(call.id.trim(), i);
+      }
+    }
+  }
+
+  const childrenByTaskIndex = new Map<number, ToolCallRecord[]>();
+  const consumedChildIndices = new Set<number>();
+  if (taskIndices.length > 0) {
+    for (const tIdx of taskIndices) {
+      childrenByTaskIndex.set(tIdx, []);
+    }
+    for (let i = 0; i < records.length; i += 1) {
+      if (childrenByTaskIndex.has(i)) {
+        continue;
+      }
+      const call = records[i];
+      const parentId = call.parent_id?.trim();
+      if (parentId && taskIndexById.has(parentId)) {
+        const ownerIdx = taskIndexById.get(parentId)!;
+        childrenByTaskIndex.get(ownerIdx)?.push(call);
+        consumedChildIndices.add(i);
+        continue;
+      }
+      if (!parentId && call.subagent) {
+        const precedingTasks = taskIndices.filter((tIdx) => tIdx < i);
+        if (precedingTasks.length > 0) {
+          const subLabel = call.subagent.trim().toLowerCase();
+          const matchedIdx =
+            [...precedingTasks].reverse().find((tIdx) => {
+              const tType = firstNonEmptyString(records[tIdx].args, ["subagent_type"]);
+              return tType?.toLowerCase() === subLabel;
+            }) ?? precedingTasks[precedingTasks.length - 1];
+          childrenByTaskIndex.get(matchedIdx)?.push(call);
+          consumedChildIndices.add(i);
+        }
+      }
+    }
+  }
+
   let buffer: ToolCallRecord[] = [];
   let bufferStartIndex = -1;
+  let subagentBuffer: SubagentRunItem[] = [];
+  let subagentStartIndex = -1;
 
   const flushBuffer = (isTrailing: boolean) => {
     if (buffer.length === 0) {
@@ -239,19 +429,52 @@ export function groupToolCalls(
     });
   };
 
+  const flushSubagents = () => {
+    if (subagentBuffer.length === 0) {
+      return;
+    }
+    const items = subagentBuffer.slice();
+    const startIdx = subagentStartIndex;
+    subagentBuffer = [];
+    subagentStartIndex = -1;
+
+    const runningCount = items.filter((it) => it.status === "running").length;
+    blocks.push({
+      kind: "subagent_group",
+      id: `${prefix}:subagent:${startIdx}:${items[0].taskCall.id || startIdx}`,
+      items,
+      isParallel: items.length > 1,
+      runningCount,
+    });
+  };
+
   for (let i = 0; i < records.length; i += 1) {
-    if (buffer.length > 0 && splitSet.has(i)) {
+    if (splitSet.has(i)) {
       flushBuffer(false);
+      flushSubagents();
+    }
+
+    if (consumedChildIndices.has(i)) {
+      continue;
     }
 
     const call = records[i];
-    if (isReadExplorationTool(call.name)) {
+    if (childrenByTaskIndex.has(i)) {
+      flushBuffer(false);
+      if (subagentBuffer.length === 0) {
+        subagentStartIndex = i;
+      }
+      const nested = childrenByTaskIndex.get(i) ?? [];
+      subagentBuffer.push(buildSubagentRunItem(call, i, nested, options, prefix));
+    } else if (isReadExplorationTool(call.name)) {
+      flushSubagents();
       if (buffer.length === 0) {
         bufferStartIndex = i;
       }
       buffer.push(call);
     } else {
       flushBuffer(false);
+      flushSubagents();
       blocks.push({
         kind: "single_tool",
         id: `${prefix}:tool:${i}:${stableCallToken(call, i)}`,
@@ -261,6 +484,7 @@ export function groupToolCalls(
   }
 
   flushBuffer(true);
+  flushSubagents();
   return blocks;
 }
 

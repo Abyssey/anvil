@@ -372,6 +372,19 @@ class DeepAgentHarness:
         config: dict[str, Any] = {"configurable": {"thread_id": catalog.session_id}}
         prev_mtimes = self._artifact_store.snapshot_mtimes(catalog.session_id)
         interrupted = False
+        active_tasks: dict[str, str] = {}
+        ns_subagent_map: dict[tuple[Any, ...], tuple[str, str | None]] = {}
+
+        def _resolve_subagent(ns: tuple[Any, ...]) -> tuple[str | None, str | None]:
+            if not ns:
+                return None, None
+            cached = ns_subagent_map.get(ns)
+            if cached is not None:
+                return cached
+            if len(active_tasks) == 1:
+                only_id, only_name = next(iter(active_tasks.items()))
+                return only_name, only_id
+            return _subagent_name(ns), None
 
         async with RunContext.activate(catalog):
             try:
@@ -384,16 +397,61 @@ class DeepAgentHarness:
                     if not isinstance(item, tuple) or len(item) != 3:
                         continue
                     namespace, stream_mode_name, payload = item
-                    subagent_label = _subagent_name(namespace)
 
                     if stream_mode_name == "messages" and isinstance(payload, tuple):
                         chunk = payload[0]
+                        meta = (
+                            payload[1]
+                            if len(payload) > 1 and isinstance(payload[1], Mapping)
+                            else {}
+                        )
+                        if namespace:
+                            raw_parent_id = meta.get("lc_subagent_tool_call_id")
+                            parent_tc_id = (
+                                str(raw_parent_id)
+                                if isinstance(raw_parent_id, str) and raw_parent_id
+                                else None
+                            )
+                            raw_agent = meta.get("lc_agent_name")
+                            agent_name = (
+                                str(raw_agent)
+                                if isinstance(raw_agent, str) and raw_agent
+                                else (
+                                    active_tasks.get(parent_tc_id, "")
+                                    if parent_tc_id
+                                    else ""
+                                )
+                            )
+                            if agent_name or parent_tc_id:
+                                ns_subagent_map[namespace] = (
+                                    agent_name or _subagent_name(namespace) or "subagent",
+                                    parent_tc_id,
+                                )
+                        subagent_label, _ = _resolve_subagent(namespace)
                         for ev in self._events_from_message_chunk(chunk, subagent_label):
                             yield ev
                         continue
 
                     if stream_mode_name == "updates" and isinstance(payload, Mapping):
-                        for ev in self._events_from_update(payload, subagent_label):
+                        subagent_label, parent_tc_id = _resolve_subagent(namespace)
+                        for ev in self._events_from_update(
+                            payload,
+                            subagent_label,
+                            parent_id=parent_tc_id,
+                        ):
+                            if not namespace:
+                                if ev.event == "tool_start" and ev.data.get("name") == "task":
+                                    t_id = str(ev.data.get("id") or "")
+                                    t_args = ev.data.get("args")
+                                    s_type = (
+                                        str(t_args.get("subagent_type") or "subagent")
+                                        if isinstance(t_args, Mapping)
+                                        else "subagent"
+                                    )
+                                    if t_id:
+                                        active_tasks[t_id] = s_type
+                                elif ev.event == "tool_end":
+                                    active_tasks.pop(str(ev.data.get("id") or ""), None)
                             if ev.event == "interrupt":
                                 interrupted = True
                             yield ev
@@ -483,8 +541,9 @@ class DeepAgentHarness:
         chunk: object,
         subagent: str | None,
     ) -> list[HarnessEvent]:
+        if subagent is not None:
+            return []
         events: list[HarnessEvent] = []
-        sub_extra = {"subagent": subagent} if subagent else {}
         additional = getattr(chunk, "additional_kwargs", None)
         if isinstance(additional, Mapping):
             reasoning = additional.get("reasoning_content")
@@ -492,13 +551,13 @@ class DeepAgentHarness:
                 events.append(
                     HarnessEvent(
                         event="thinking",
-                        data={"text": reasoning, **sub_extra},
+                        data={"text": reasoning},
                     )
                 )
         content = getattr(chunk, "content", None)
         is_ai_chunk = getattr(chunk, "type", "") == "AIMessageChunk"
         if isinstance(content, str):
-            if content and is_ai_chunk and subagent is None:
+            if content and is_ai_chunk:
                 events.append(HarnessEvent(event="token", data={"text": content}))
         elif isinstance(content, list) and is_ai_chunk:
             for block in content:
@@ -511,10 +570,10 @@ class DeepAgentHarness:
                         events.append(
                             HarnessEvent(
                                 event="thinking",
-                                data={"text": think_text, **sub_extra},
+                                data={"text": think_text},
                             )
                         )
-                elif btype == "text" and subagent is None:
+                elif btype == "text":
                     text_val = block.get("text")
                     if isinstance(text_val, str) and text_val:
                         events.append(HarnessEvent(event="token", data={"text": text_val}))
@@ -524,6 +583,8 @@ class DeepAgentHarness:
         self,
         payload: Mapping[str, Any],
         subagent: str | None,
+        *,
+        parent_id: str | None = None,
     ) -> list[HarnessEvent]:
         events: list[HarnessEvent] = []
         if "__interrupt__" in payload:
@@ -534,6 +595,12 @@ class DeepAgentHarness:
                 if isinstance(value, Mapping):
                     events.append(HarnessEvent(event="interrupt", data=dict(value)))
             return events
+
+        extra_meta: dict[str, Any] = {}
+        if subagent:
+            extra_meta["subagent"] = subagent
+        if parent_id:
+            extra_meta["parent_id"] = parent_id
 
         model_upd = payload.get("model")
         if isinstance(model_upd, Mapping):
@@ -549,7 +616,7 @@ class DeepAgentHarness:
                                     "id": str(tc.get("id") or ""),
                                     "name": tc_name,
                                     "args": dict(tc_args) if isinstance(tc_args, Mapping) else {},
-                                    **({"subagent": subagent} if subagent else {}),
+                                    **extra_meta,
                                 },
                             )
                         )
@@ -562,6 +629,7 @@ class DeepAgentHarness:
                 status = str(getattr(msg, "status", "success") or "success")
                 content = getattr(msg, "content", "")
                 text = content if isinstance(content, str) else str(content)
+                max_len = 16000 if name == "task" else 4000
                 events.append(
                     HarnessEvent(
                         event="tool_end",
@@ -569,8 +637,8 @@ class DeepAgentHarness:
                             "id": tc_id,
                             "name": name,
                             "status": status,
-                            "output": text[:4000],
-                            **({"subagent": subagent} if subagent else {}),
+                            "output": text[:max_len],
+                            **extra_meta,
                         },
                     )
                 )

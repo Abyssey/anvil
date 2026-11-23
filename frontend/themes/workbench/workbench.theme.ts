@@ -125,6 +125,24 @@ export const workbenchTheme = defineTheme({
       base: {
         borderRadius: '14px',
       },
+      'variant:muted': {
+        borderRadius: '10px',
+        paddingBlock: '6px',
+        paddingInline: '10px',
+        '--text-body-size': '0.8125rem',
+        '--text-body-leading': '1.42',
+        '--text-label-size': '0.8125rem',
+        '--text-label-leading': '1.35',
+        '--text-supporting-leading': '1.35',
+        '--text-heading-4-size': '0.84375rem',
+        '--text-heading-4-leading': '1.35',
+        '--text-heading-5-size': '0.8125rem',
+        '--text-heading-5-leading': '1.35',
+        '--text-heading-6-size': '0.78125rem',
+        '--text-heading-6-leading': '1.35',
+        '--spacing-2': '0.3125rem',
+        '--spacing-3': '0.5rem',
+      },
     },
     'text-input': {
       base: {

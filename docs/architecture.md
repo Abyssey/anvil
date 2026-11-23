@@ -71,5 +71,5 @@ flowchart TD
 
 ## 5. 프론트엔드 파생 뷰 & Astryx 디자인 시스템 (`frontend/`)
 
-- **원본 보존 + 순수 파생 뷰**: 스트리밍 SSE 이벤트와 메시지 원본 배열은 디버깅을 위해 그대로 보존하고, 화면 렌더링 직전에 순수 셀렉터(`groupToolCalls`, `summarizeRevertImpact`)로 연속 탐색 도구 그룹(`ExplorationGroup`)과 소요 시간·되돌리기 영향 범위를 계산합니다.
+- **원본 보존 + 순수 파생 뷰**: 스트리밍 SSE 이벤트와 메시지 원본 배열은 디버깅을 위해 그대로 보존하고, 화면 렌더링 직전에 순수 셀렉터(`groupToolCalls`, `summarizeRevertImpact`)로 연속 탐색 도구 그룹(`ExplorationGroup`), 병렬·독립 서브에이전트 카드(`SubagentGroupView`: `parent_id` 기반 하위 도구 중첩·소요 시간·`[Important]`/`[Nit]` 리뷰 집계), 턴 소요 시간·되돌리기 영향 범위를 계산합니다.
 - **100% Astryx 컴포넌트 구성**: 원시 HTML/인라인 스타일 없이 `@astryxdesign/core` 프리미티브(`AppShell`, `ChatLayout`, `Kbd`, `IconButton`, `AlertDialog`, `Drawer`, `CodeBlock`)와 역할 기반 로컬 테마(`themes/workbench`)만으로 다크/라이트 모드 및 모바일 반응형 레이아웃을 구성합니다.

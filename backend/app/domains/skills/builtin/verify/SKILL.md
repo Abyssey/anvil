@@ -26,7 +26,12 @@ Inspect only the items below whose trigger matches your actual diff:
 - **Never weaken the check to pass the code**: Do not delete assertions, add arbitrary `sleep`s to mask race conditions, skip tests, or rewrite `AGENTS.md` / `REVIEW.md` / boundary tests to make a broken change appear green.
 - **Three-Strike Rule**: You have up to **3 rounds** to diagnose and fix a failing check from its real error output. If verification still fails on strike 3, stop modifying code and present the exact command, failure output, and root-cause analysis to the user (or call `ask_user` if requirements conflict).
 
-## 4. Stamp Evidence in `/artifacts/walkthrough.md`
+## 4. Independent Subagent Code Review (`reviewer`)
+- For non-trivial or multi-file workspace changes in `Plan` or `Auto` mode, delegate an independent read-only review after checks pass by calling `task(subagent_type="reviewer", description="<concise 1-line review scope>")`.
+- Never write a simulated "self-review" in plain assistant text instead of invoking the `reviewer` subagent — the UI renders `task` delegations as dedicated `Code Reviewer` cards showing exact inspected files and `[Important]` / `[Nit]` / `[Pre-existing]` findings.
+- Resolve any `[Important]` regressions flagged by `reviewer` and re-run the relevant check before concluding.
+
+## 5. Stamp Evidence in `/artifacts/walkthrough.md`
 Record a concise `## Verification` section in `/artifacts/walkthrough.md` listing:
 - Exact commands executed and pass/fail counts (e.g., `Verification: passed — pytest -q (82 passed), ruff check (0 errors)`).
 - Or, if verification could not be executed in the environment, explicitly write `Verification: none (<concrete reason>)`.

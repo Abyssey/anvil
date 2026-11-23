@@ -561,6 +561,7 @@ class SessionService:
         token_parts: list[str] = []
         tool_map: dict[str, ToolCallRecord] = {}
         tool_order: list[str] = []
+        tool_started_at: dict[str, float] = {}
         pending_interrupt: PendingInterrupt | None = None
         turn_checkpoint_id: str | None = None
         turn_changed_files: list[str] = []
@@ -576,6 +577,7 @@ class SessionService:
 
         try:
             async for h_event in raw_stream:
+                out_data = dict(h_event.data)
                 if h_event.event == "thinking":
                     text = str(h_event.data.get("text") or "")
                     thinking_parts.append(text)
@@ -584,6 +586,8 @@ class SessionService:
                     token_parts.append(text)
                 elif h_event.event == "tool_start":
                     tc_id = str(h_event.data.get("id") or uuid.uuid4().hex[:8])
+                    tool_started_at[tc_id] = time.perf_counter()
+                    raw_parent = h_event.data.get("parent_id")
                     record = ToolCallRecord(
                         id=tc_id,
                         name=str(h_event.data.get("name") or ""),
@@ -594,16 +598,32 @@ class SessionService:
                         subagent=h_event.data.get("subagent")
                         if isinstance(h_event.data.get("subagent"), str)
                         else None,
+                        parent_id=(
+                            raw_parent
+                            if isinstance(raw_parent, str) and raw_parent
+                            else None
+                        ),
                     )
                     tool_map[tc_id] = record
                     tool_order.append(tc_id)
                 elif h_event.event == "tool_end":
                     tc_id = str(h_event.data.get("id") or "")
+                    started_t = tool_started_at.get(tc_id)
+                    duration_ms = (
+                        max(0, round((time.perf_counter() - started_t) * 1000))
+                        if started_t is not None
+                        else None
+                    )
+                    if duration_ms is not None:
+                        out_data["duration_ms"] = duration_ms
                     if tc_id in tool_map:
+                        if tool_map[tc_id].parent_id and "parent_id" not in out_data:
+                            out_data["parent_id"] = tool_map[tc_id].parent_id
                         tool_map[tc_id] = tool_map[tc_id].model_copy(
                             update={
                                 "output": str(h_event.data.get("output") or ""),
                                 "status": str(h_event.data.get("status") or "success"),
+                                "duration_ms": duration_ms,
                             }
                         )
                 elif h_event.event == "interrupt":
@@ -642,7 +662,7 @@ class SessionService:
                         },
                     )
 
-                yield StreamEvent(event=h_event.event, data=dict(h_event.data))
+                yield StreamEvent(event=h_event.event, data=out_data)
         except (asyncio.CancelledError, GeneratorExit):
             was_cancelled = True
             logger.info(

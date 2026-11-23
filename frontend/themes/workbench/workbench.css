@@ -586,6 +586,35 @@
     --color-text-secondary: light-dark(#474747, #b9b9b9);
   }
 
+  .astryx-card[data-variant="muted"] {
+    border-radius: 10px;
+    --text-body-size: 0.8125rem;
+    --text-body-leading: 1.42;
+    --text-label-size: 0.8125rem;
+    --text-label-leading: 1.35;
+    --text-supporting-leading: 1.35;
+    --text-heading-4-size: 0.84375rem;
+    --text-heading-4-leading: 1.35;
+    --text-heading-5-size: 0.8125rem;
+    --text-heading-5-leading: 1.35;
+    --text-heading-6-size: 0.78125rem;
+    --text-heading-6-leading: 1.35;
+    --spacing-2: 0.3125rem;
+    --spacing-3: 0.5rem;
+    --astryx-card-padding-inline: 10px;
+    --astryx-card-padding-block-start: 6px;
+    --astryx-card-padding-block-end: 6px;
+    --_card-radius: 10px;
+    --_card-radius-top-left: 10px;
+    --_card-radius-top-right: 10px;
+    --_card-radius-bottom-right: 10px;
+    --_card-radius-bottom-left: 10px;
+    --_card-radius-start-start: initial;
+    --_card-radius-start-end: initial;
+    --_card-radius-end-start: initial;
+    --_card-radius-end-end: initial;
+  }
+
   .astryx-section {
     --astryx-section-padding: var(--spacing-3);
   }

@@ -29,6 +29,8 @@ class ToolCallRecord(BaseModel):
     output: str = ""
     status: str = "running"
     subagent: str | None = None
+    parent_id: str | None = None
+    duration_ms: int | None = None
 
 
 class ChatMessage(BaseModel):

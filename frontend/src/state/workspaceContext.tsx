@@ -682,6 +682,7 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
       const controller = new AbortController();
       abortRef.current = controller;
       const startedAtMs = Date.now();
+      const toolStartedAt = new Map<string, number>();
       const existingMessageIds = new Set(
         messagesRef.current
           .filter((m) => m.session_id === targetSessionId && !m.id.startsWith("local-"))
@@ -727,8 +728,12 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
               };
             });
           } else if (ev.event === "tool_start") {
+            const tcId = String(ev.data.id ?? "");
+            if (tcId) {
+              toolStartedAt.set(tcId, Date.now());
+            }
             const rec: ToolCallRecord = {
-              id: String(ev.data.id ?? ""),
+              id: tcId,
               name: String(ev.data.name ?? ""),
               args:
                 typeof ev.data.args === "object" && ev.data.args !== null
@@ -737,6 +742,8 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
               output: "",
               status: "running",
               subagent: typeof ev.data.subagent === "string" ? ev.data.subagent : null,
+              parent_id: typeof ev.data.parent_id === "string" ? ev.data.parent_id : null,
+              duration_ms: null,
             };
             setStreamingAssistant((prev) =>
               prev
@@ -751,12 +758,19 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
             const id = String(ev.data.id ?? "");
             const output = String(ev.data.output ?? "");
             const status = String(ev.data.status ?? "success");
+            const serverDuration =
+              typeof ev.data.duration_ms === "number" ? ev.data.duration_ms : null;
+            const startedT = toolStartedAt.get(id);
+            const resolvedDuration =
+              serverDuration ?? (startedT !== undefined ? Math.max(0, Date.now() - startedT) : null);
             setStreamingAssistant((prev) =>
               prev
                 ? {
                     ...prev,
                     toolCalls: prev.toolCalls.map((tc) =>
-                      tc.id === id ? { ...tc, output, status } : tc,
+                      tc.id === id
+                        ? { ...tc, output, status, duration_ms: resolvedDuration }
+                        : tc,
                     ),
                   }
                 : prev,

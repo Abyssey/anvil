@@ -357,3 +357,120 @@ describe("formatWorkedDuration & computeAssistantTurnDurationMs", () => {
     expect(computeAssistantTurnDurationMs(messages, 8)).toBeNull();
   });
 });
+
+describe("subagent grouping & review telemetry", () => {
+  it("nests child tool calls inside their parent task subagent block and parses reviewer findings", () => {
+    const records: ToolCallRecord[] = [
+      makeTool("tc-edit", "edit_file", { file_path: "/backend/app.py" }),
+      makeTool("tc-test", "execute", { command: "pytest -q" }),
+      {
+        id: "task-rev",
+        name: "task",
+        args: {
+          subagent_type: "reviewer",
+          description: "Audit backend/app.py for regressions and DDD compliance",
+        },
+        status: "success",
+        output: "[Nit] `backend/app.py`: docstring 보강 권장\n[Pre-existing] 기존 헬퍼 유지",
+        subagent: null,
+        duration_ms: 2400,
+      },
+      {
+        id: "child-1",
+        name: "read_file",
+        args: { file_path: "/backend/app.py" },
+        status: "success",
+        output: "code",
+        subagent: "reviewer",
+        parent_id: "task-rev",
+      },
+      {
+        id: "child-2",
+        name: "grep",
+        args: { pattern: "journal_mode", path: "/backend" },
+        status: "success",
+        output: "match",
+        subagent: "reviewer",
+        parent_id: "task-rev",
+      },
+    ];
+
+    const blocks = groupToolCalls(records, {
+      isStreaming: false,
+      hasAssistantTextStarted: true,
+      groupKeyPrefix: "m-rev",
+    });
+
+    // Child read_file/grep calls MUST NOT leak into a top-level exploration_group!
+    expect(blocks.map((b) => b.kind)).toEqual(["single_tool", "single_tool", "subagent_group"]);
+    const subBlock = blocks[2];
+    expect(subBlock.kind).toBe("subagent_group");
+    if (subBlock.kind === "subagent_group") {
+      expect(subBlock.isParallel).toBe(false);
+      expect(subBlock.items).toHaveLength(1);
+      const item = subBlock.items[0];
+      expect(item.role).toBe("reviewer");
+      expect(item.roleLabel).toBe("Code Reviewer");
+      expect(item.nestedCalls.map((c) => c.id)).toEqual(["child-1", "child-2"]);
+      expect(item.summaryLabel).toBe("완료 · 도구 2회 사용 (파일 1개 읽음 · 검색 1회) · 2s");
+      expect(item.findingCounts).toEqual({ important: 0, nit: 1, preExisting: 1 });
+    }
+  });
+
+  it("groups parallel explorer and reviewer task calls with live running telemetry", () => {
+    const records: ToolCallRecord[] = [
+      {
+        id: "task-exp",
+        name: "task",
+        args: { subagent_type: "explorer", description: "Map frontend components" },
+        status: "running",
+        output: "",
+        subagent: null,
+      },
+      {
+        id: "task-rev",
+        name: "task",
+        args: { subagent_type: "reviewer", description: "Review SQLite persistence" },
+        status: "success",
+        output: "[Important] Missing fsync on probe file",
+        subagent: null,
+        duration_ms: 1500,
+      },
+      {
+        id: "c-exp-1",
+        name: "read_file",
+        args: { file_path: "/frontend/src/App.tsx" },
+        status: "running",
+        output: "",
+        subagent: "explorer",
+        parent_id: "task-exp",
+      },
+      {
+        id: "c-rev-1",
+        name: "read_file",
+        args: { file_path: "/backend/app/shared/config.py" },
+        status: "success",
+        output: "...",
+        subagent: "reviewer",
+        parent_id: "task-rev",
+      },
+    ];
+
+    const blocks = groupToolCalls(records, {
+      isStreaming: true,
+      hasAssistantTextStarted: false,
+      groupKeyPrefix: "stream",
+    });
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].kind).toBe("subagent_group");
+    if (blocks[0].kind === "subagent_group") {
+      expect(blocks[0].isParallel).toBe(true);
+      expect(blocks[0].runningCount).toBe(1);
+      expect(blocks[0].items[0].status).toBe("running");
+      expect(blocks[0].items[0].activeLabel).toBe("App.tsx 읽는 중... · 도구 1회 호출");
+      expect(blocks[0].items[1].status).toBe("completed");
+      expect(blocks[0].items[1].findingCounts?.important).toBe(1);
+    }
+  });
+});

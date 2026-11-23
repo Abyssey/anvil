@@ -36,6 +36,7 @@ import {
 import { Composer } from "./Composer";
 import { ExplorationGroupView, toChatToolCallItem } from "./ExplorationGroupView";
 import { ShellApprovalCard } from "./ShellApprovalCard";
+import { SubagentGroupView } from "./SubagentCardView";
 
 const ONBOARDING_SAMPLE_PROMPT =
   "이 프로젝트 구조와 핵심 의존성을 파악해서 온보딩 문서로 정리해줘";
@@ -115,22 +116,35 @@ function renderGroupedToolBlocks(
     return null;
   }
   return (
-    <VStack gap={0.5} width="100%">
-      {blocks.map((block, blockIndex) =>
-        block.kind === "exploration_group" ? (
-          <ExplorationGroupView
-            key={block.id}
-            group={block}
-            isOpen={groupOpenOverrides[block.id] ?? false}
-            onToggle={onToggleGroup}
-          />
-        ) : (
+    <VStack gap={1} width="100%">
+      {blocks.map((block, blockIndex) => {
+        if (block.kind === "exploration_group") {
+          return (
+            <ExplorationGroupView
+              key={block.id}
+              group={block}
+              isOpen={groupOpenOverrides[block.id] ?? false}
+              onToggle={onToggleGroup}
+            />
+          );
+        }
+        if (block.kind === "subagent_group") {
+          return (
+            <SubagentGroupView
+              key={block.id}
+              group={block}
+              openOverrides={groupOpenOverrides}
+              onToggle={onToggleGroup}
+            />
+          );
+        }
+        return (
           <ChatToolCalls
             key={block.id}
             calls={[toChatToolCallItem(block.call, blockIndex)]}
           />
-        ),
-      )}
+        );
+      })}
     </VStack>
   );
 }

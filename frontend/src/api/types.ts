@@ -9,6 +9,8 @@ export interface ToolCallRecord {
   output: string;
   status: string;
   subagent?: string | null;
+  parent_id?: string | null;
+  duration_ms?: number | null;
 }
 
 export type VerificationStamp = "passed" | "failed" | "none" | "not_needed";

@@ -23,8 +23,9 @@
 - **에이전트 스킬(`skills.sh`) & 2계층 메모리 격리**
   - 내장 스킬(`codebase-onboarding`, `verify`) 및 `skills.sh` 카탈로그 검색·설치·`/skill-name` 핀 고정 지원
   - 세션 단기 기억(`/artifacts/`, 대화 스레드)과 프로젝트 장기 기억(`/memories/project/AGENTS.md`, 레포지토리 `/AGENTS.md`)을 엄격히 분리해 프로젝트 간 컨텍스트 오염 방지
-- **클린 스트리밍 워크벤치 UI**
-  - 연속 읽기·탐색 도구 호출을 1줄 아코디언(`ExplorationGroup`)으로 자동 병합, 턴별 소요 시간(`Worked for ...`), 다크 코드 블록(`workbench` 테마), `pele/lazy` 기반 경량 Mermaid 다이어그램 렌더링
+- **클린 스트리밍 워크벤치 UI & 서브에이전트 카드**
+  - 연속 읽기·탐색 도구 호출을 1줄 아코디언(`ExplorationGroup`)으로 자동 병합하고, 병렬·독립 서브에이전트(`Explorer` · `Code Reviewer`) 실행은 Claude Code 스타일의 전용 카드(`SubagentGroupView` — 역할 배지, 도구 호출 수·소요 시간 요약, 내부 실행 도구 트레이스, `[Important]`/`[Nit]` 마크다운 리뷰 리포트)로 분리 표시
+  - 턴별 소요 시간(`Worked for ...`), 다크 코드 블록(`workbench` 테마), `pele/lazy` 기반 경량 Mermaid 다이어그램 렌더링
   - API 키는 브라우저(`localStorage`)에만 보관하고 요청 헤더(`X-LLM-*`)로만 전달하며, 서버 DB·체크포인트·로그(`SecretRedactionFilter`)에 평문 저장하지 않음
 
 ---
