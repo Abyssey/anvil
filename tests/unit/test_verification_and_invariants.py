@@ -197,19 +197,33 @@ def test_shell_guard_invariants_idempotency_and_plan_verification_gate() -> None
         )
         assert guard.evaluate(cmd, "plan", plan_approved=True).action == ShellAction.ALLOW
 
-    # Metacharacter/chaining smuggling MUST NEVER auto-allow in Plan mode
-    smuggled = [
+    # Destructive commands or chained destructive subcommands MUST still require approval
+    destructive_chained = [
         "pytest && rm -rf build",
-        "pytest; echo pwned",
-        "pytest | tee out.log",
-        "pytest $(whoami)",
-        "pytest `id`",
-        "pytest > /tmp/out.txt",
+        "echo clean; rm -f stale.tmp",
+        "git push origin main",
+        "git reset --hard HEAD",
+        "git checkout -- app.py",
+    ]
+    for cmd in destructive_chained:
+        verdict = guard.evaluate(cmd, "plan", plan_approved=True)
+        assert verdict.action == ShellAction.REQUIRE_APPROVAL, (
+            f"Expected REQUIRE_APPROVAL in approved plan mode: {cmd}"
+        )
+
+    # Routine dev/compound commands execute autonomously once the plan is approved,
+    # while still requiring approval before plan approval.
+    routine_post_plan = [
+        "cd frontend && npm test -- --run",
+        "pytest -q | tee /tmp/out.log",
         "echo hello",
     ]
-    for cmd in smuggled:
-        verdict = guard.evaluate(cmd, "plan", plan_approved=True)
-        assert verdict.action != ShellAction.ALLOW, f"Unexpectedly allowed in plan mode: {cmd}"
+    for cmd in routine_post_plan:
+        assert (
+            guard.evaluate(cmd, "plan", plan_approved=False).action
+            == ShellAction.REQUIRE_APPROVAL
+        )
+        assert guard.evaluate(cmd, "plan", plan_approved=True).action == ShellAction.ALLOW
 
     # Independent verifier rule paths ("Changes can't modify their own checks")
     for protected in (

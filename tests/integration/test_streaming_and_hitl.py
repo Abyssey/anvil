@@ -250,7 +250,7 @@ def test_plan_mode_revise_approve_and_shell_hitl_and_sqlite_restart(tmp_path: Pa
                 tool_calls=[
                     {
                         "name": "execute",
-                        "args": {"command": "echo verify-ok"},
+                        "args": {"command": "rm -f stale.tmp"},
                     }
                 ]
             ),
@@ -310,7 +310,7 @@ def test_plan_mode_revise_approve_and_shell_hitl_and_sqlite_restart(tmp_path: Pa
         assert any(
             name == "interrupt"
             and p["kind"] == "shell_approval"
-            and p.get("command") == "echo verify-ok"
+            and p.get("command") == "rm -f stale.tmp"
             for name, p in events3
         )
 
@@ -336,7 +336,8 @@ def test_plan_mode_revise_approve_and_shell_hitl_and_sqlite_restart(tmp_path: Pa
 def test_shell_deny_in_plan_mode_skips_execution(tmp_path: Path) -> None:
     workspace = tmp_path / "repo"
     _init_workspace(workspace)
-    sentinel = workspace / "should_not_exist.txt"
+    sentinel = workspace / "protected_file.txt"
+    sentinel.write_text("keep me\n", encoding="utf-8")
     model = ScriptedReasoningChatModel(
         turns=[
             ScriptedTurn(
@@ -345,7 +346,7 @@ def test_shell_deny_in_plan_mode_skips_execution(tmp_path: Path) -> None:
                         "name": "write_file",
                         "args": {
                             "file_path": "/artifacts/implementation_plan.md",
-                            "content": "# Plan\nRun touch command",
+                            "content": "# Plan\nRemove protected_file.txt",
                         },
                     }
                 ]
@@ -353,7 +354,7 @@ def test_shell_deny_in_plan_mode_skips_execution(tmp_path: Path) -> None:
             ScriptedTurn(content="Plan ready."),
             ScriptedTurn(
                 tool_calls=[
-                    {"name": "execute", "args": {"command": f"touch {sentinel.name}"}}
+                    {"name": "execute", "args": {"command": f"rm -f {sentinel.name}"}}
                 ]
             ),
             ScriptedTurn(content="Understood, skipped shell command."),
@@ -369,7 +370,7 @@ def test_shell_deny_in_plan_mode_skips_execution(tmp_path: Path) -> None:
 
         client.post(
             f"/api/sessions/{sid}/messages/stream",
-            json={"content": "Create file via shell", "mode": "plan"},
+            json={"content": "Delete file via shell", "mode": "plan"},
             headers=_headers(),
         )
         res1 = client.post(
@@ -386,7 +387,7 @@ def test_shell_deny_in_plan_mode_skips_execution(tmp_path: Path) -> None:
         )
         events = _parse_sse(res2.text)
         assert any(name == "done" for name, _ in events)
-        assert not sentinel.exists()
+        assert sentinel.exists()
 
 
 async def test_stream_cancellation_recovers_session_status_and_saves_partial_message(

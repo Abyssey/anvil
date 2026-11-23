@@ -106,7 +106,7 @@ def test_real_openai_wire_sse_onboarding_and_plan_hitl(tmp_path: Path) -> None:
                 },
                 {
                     "name": "execute",
-                    "args": {"command": "echo wire-verified"},
+                    "args": {"command": "rm -f legacy_v1.tmp"},
                 },
             ],
         ),

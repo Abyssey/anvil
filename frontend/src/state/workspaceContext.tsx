@@ -768,11 +768,16 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
             setRightDrawerTab("artifacts");
           } else if (ev.event === "interrupt") {
             const pending = ev.data as unknown as PendingInterrupt;
-            setActiveSession((prev) =>
-              prev && prev.id === targetSessionId
-                ? { ...prev, status: "awaiting_approval", pending_interrupt: pending }
-                : prev,
-            );
+            setActiveSession((prev) => {
+              if (!prev || prev.id !== targetSessionId) return prev;
+              const next: Session = {
+                ...prev,
+                status: "awaiting_approval",
+                pending_interrupt: pending,
+              };
+              activeSessionRef.current = next;
+              return next;
+            });
             if (pending.kind === "plan_review") {
               setActiveArtifactTab("implementation_plan");
               setRightDrawerTab("artifacts");
@@ -983,12 +988,19 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
           created_at: new Date().toISOString(),
         };
         setMessages((prev) => [...prev, optimisticUser]);
-        setActiveSession((prev) =>
-          prev && prev.id === activeSession.id
-            ? { ...prev, status: "running", pending_interrupt: null }
-            : prev,
-        );
       }
+      const clearedSession: Session = {
+        ...activeSession,
+        status: "running",
+        pending_interrupt: null,
+      };
+      activeSessionRef.current = clearedSession;
+      setActiveSession((prev) =>
+        prev && prev.id === activeSession.id ? clearedSession : prev,
+      );
+      setSessions((prev) =>
+        prev.map((s) => (s.id === activeSession.id ? clearedSession : s)),
+      );
       await runSSEStream(
         `/api/sessions/${encodeURIComponent(activeSession.id)}/resume`,
         {

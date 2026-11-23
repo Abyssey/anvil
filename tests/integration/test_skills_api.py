@@ -371,6 +371,44 @@ async def test_skills_sh_client_http_browse_search_preview_and_size_cap() -> Non
     assert exc_cap.value.status_code == 413
 
 
+@pytest.mark.asyncio
+async def test_skills_sh_client_defaults_to_http_verify_false_and_scheme_fallback() -> None:
+    seen_urls: list[str] = []
+
+    def fallback_handler(request: httpx.Request) -> httpx.Response:
+        seen_urls.append(str(request.url))
+        if request.url.scheme == "http":
+            raise httpx.ConnectError("HTTP port blocked", request=request)
+        return httpx.Response(
+            200,
+            json={
+                "skills": [
+                    {
+                        "source": "vercel-labs/agent-skills",
+                        "skillId": "ai-sdk",
+                        "name": "ai-sdk",
+                        "installs": 1200,
+                    }
+                ],
+                "total": 1,
+                "hasMore": False,
+                "page": 0,
+            },
+        )
+
+    client = SkillsShClient(transport=httpx.MockTransport(fallback_handler))
+    assert client._verify_ssl is False
+    assert client._skills_sh_base_url == "http://skills.sh"
+
+    page = await client.browse("all-time", page=0)
+    assert len(page.skills) == 1
+    assert page.skills[0].name == "ai-sdk"
+    assert seen_urls == [
+        "http://skills.sh/api/skills/all-time/0",
+        "https://skills.sh/api/skills/all-time/0",
+    ]
+
+
 # ---------------------------------------------------------------------------
 # SkillStore & SkillFiles precedence
 # ---------------------------------------------------------------------------

@@ -31,26 +31,46 @@ def test_hard_deny_list_blocks_in_all_modes() -> None:
             assert verdict.action == ShellAction.BLOCK, f"{cmd} should be blocked in {mode}"
 
 
-def test_plan_mode_requires_approval_for_allowed_commands() -> None:
+def test_plan_mode_requires_approval_before_plan_and_allows_routine_after_approval() -> None:
     guard = ShellGuard()
-    for cmd in ("pytest -q", "git status", "ls -la"):
-        verdict = guard.evaluate(cmd, mode="plan")
-        assert verdict.action == ShellAction.REQUIRE_APPROVAL
+    for cmd in ("pytest -q", "git status", "ls -la", "mv a.py b.py"):
+        assert guard.evaluate(cmd, mode="plan", plan_approved=False).action == (
+            ShellAction.REQUIRE_APPROVAL
+        )
+        assert guard.evaluate(cmd, mode="plan", plan_approved=True).action == ShellAction.ALLOW
+
+    for destructive in ("rm -f old.py", "git push origin main"):
+        assert guard.evaluate(destructive, mode="plan", plan_approved=True).action == (
+            ShellAction.REQUIRE_APPROVAL
+        )
 
 
 def test_auto_mode_allows_safe_and_gates_destructive() -> None:
     guard = ShellGuard()
-    for safe_cmd in ("pytest -q", "git status", "git diff", "ruff check backend"):
-        assert guard.evaluate(safe_cmd, mode="auto").action == ShellAction.ALLOW
+    for safe_cmd in (
+        "pytest -q",
+        "git status",
+        "git diff",
+        "ruff check backend",
+        "mv a.py b.py",
+        "chmod 755 script.sh",
+        "cd frontend && npm test -- --run",
+        "pkill -f uvicorn || true",
+    ):
+        assert guard.evaluate(safe_cmd, mode="auto").action == ShellAction.ALLOW, (
+            f"{safe_cmd} should be allowed in auto mode"
+        )
 
     for destructive in (
         "rm old_file.py",
-        "mv a.py b.py",
+        "rmdir stale_dir",
         "git push origin main",
         "git reset --hard HEAD~1",
         "git clean -fd",
+        "git rebase main",
         "git checkout -- README.md",
-        "chmod 777 script.sh",
+        "git restore README.md",
+        "chown root:root script.sh",
     ):
         verdict = guard.evaluate(destructive, mode="auto")
         assert verdict.action == ShellAction.REQUIRE_APPROVAL, (

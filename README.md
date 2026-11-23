@@ -44,9 +44,24 @@ cd frontend && npm install && npm run build && cd ..
 .venv/bin/fastapi run backend/app/main.py --port 8000
 ```
 
-브라우저에서 `http://localhost:8000`에 접속합니다. FastAPI 0.165가 `/api/*` 엔드포인트와 빌드된 프론트엔드(`app.frontend()`)를 단일 프로세스로 서빙하며, 런타임 데이터는 `.data/sessions.db` 아래에 격리 저장됩니다.
+브라우저에서 `http://localhost:8000`에 접속합니다. FastAPI 0.165가 `/api/*` 엔드포인트와 빌드된 프론트엔드(`app.frontend()`)를 단일 프로세스로 서빙하며, 기본값으로 런타임 데이터는 `.data/sessions.db`(`WAL` 저널 모드) 아래에 격리 저장됩니다.
 
-### 2. LLM 엔드포인트 설정
+### 2. 스토리지 환경변수 (로컬 vs Agentic Works NAS)
+
+스토리지 경로와 SQLite 저널 모드는 **환경변수로만** 설정하며(웹 UI 노출 없음), 대화 DB(`SQLiteSessionRepository`)와 LangGraph 체크포인터(`AsyncSqliteSaver`) 양쪽에 동일하게 적용됩니다. 지정 경로에 쓰기 권한이 없거나 접근에 실패하면 서버 기동이 즉시 중단됩니다.
+
+| 환경변수 | 기본값 (로컬) | Agentic Works (NAS 마운트 · 단일 Pod/프로세스) |
+| :--- | :--- | :--- |
+| `DATA_DIR` | `<repo_root>/.data` | NAS 절대 경로 (예: `/mnt/nas/anvil-data`) |
+| `SQLITE_JOURNAL_MODE` | `WAL` | `DELETE` |
+
+```bash
+# Agentic Works (AWX) NAS 실행 예시
+DATA_DIR=/mnt/nas/anvil-data SQLITE_JOURNAL_MODE=DELETE \
+  .venv/bin/fastapi run backend/app/main.py --port 8000
+```
+
+### 3. LLM 엔드포인트 설정
 
 좌측 하단 **Configure LLM** 버튼을 눌러 OpenAI 호환 엔드포인트 정보를 입력합니다:
 - **Endpoint URL**: 예) `http://localhost:8001/v1` 또는 OpenAI 호환 게이트웨이 URL

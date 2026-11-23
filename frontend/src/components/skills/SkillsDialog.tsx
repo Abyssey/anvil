@@ -5,7 +5,6 @@ import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
 import { CodeBlock } from "@astryxdesign/core/CodeBlock";
 import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
-import { Divider } from "@astryxdesign/core/Divider";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Heading } from "@astryxdesign/core/Heading";
 import { Icon } from "@astryxdesign/core/Icon";
@@ -18,6 +17,7 @@ import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import {
   ArrowDownTrayIcon,
+  ArrowLeftIcon,
   BookmarkIcon,
   EyeIcon,
   MagnifyingGlassIcon,
@@ -37,11 +37,16 @@ import { useWorkspace } from "../../state/workspaceContext";
 type MainSkillsTab = "installed" | "discover";
 type InstallTargetScope = "global" | "workspace";
 
+type PreviewTarget =
+  | { kind: "installed"; skill: InstalledSkill }
+  | { kind: "remote"; skill: RemoteSkillSummary };
+
 interface PreviewState {
   title: string;
   subtitle: string;
   content: string;
   files: string[];
+  target: PreviewTarget;
 }
 
 function scopeBadgeVariant(scope: SkillScope): BadgeVariant {
@@ -211,6 +216,7 @@ export function SkillsDialog() {
         subtitle: `${detail.scope} · ${detail.source_label}`,
         content: detail.content,
         files: detail.files,
+        target: { kind: "installed", skill },
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load skill preview");
@@ -229,6 +235,7 @@ export function SkillsDialog() {
         subtitle: `${detail.source} (${detail.skill_id})`,
         content: detail.content,
         files: detail.files,
+        target: { kind: "remote", skill },
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to preview remote skill");
@@ -297,6 +304,38 @@ export function SkillsDialog() {
     ? (searchResults ?? [])
     : (catalogPage?.skills ?? []);
 
+  const renderPreviewAction = (target: PreviewTarget) => {
+    if (target.kind === "installed") {
+      const skillName = target.skill.name;
+      const isPinned = state.pinnedSkills.includes(skillName);
+      return (
+        <Button
+          label={isPinned ? "Pinned" : "Pin"}
+          variant={isPinned ? "secondary" : "primary"}
+          size="sm"
+          icon={<Icon icon={BookmarkIcon} size="sm" />}
+          onClick={() => handlePinSkill(skillName)}
+        />
+      );
+    }
+    const remoteSkill = target.skill;
+    if (isRemoteInstalledInTarget(remoteSkill)) {
+      return <Badge label="Installed" variant="success" />;
+    }
+    const remoteKey = `${remoteSkill.source}:${remoteSkill.skill_id}`;
+    return (
+      <IconButton
+        label="Install"
+        tooltip={`Install ${remoteSkill.name}`}
+        variant="primary"
+        size="sm"
+        icon={<Icon icon={ArrowDownTrayIcon} size="sm" />}
+        isLoading={installingKey === remoteKey}
+        onClick={() => void handleInstallRemote(remoteSkill.source, remoteSkill.skill_id, remoteKey)}
+      />
+    );
+  };
+
   return (
     <Dialog
       isOpen={state.skillsOpen}
@@ -305,330 +344,345 @@ export function SkillsDialog() {
       }}
       purpose="form"
       width={720}
+      maxHeight="88dvh"
     >
       <Layout
         height="auto"
         header={
           <DialogHeader
             title="Skills"
-            subtitle="Manage installed skills or discover and install packages from skills.sh."
             onOpenChange={(open) => {
               if (!open) actions.closeSkills();
             }}
           />
         }
         content={
-          <LayoutContent padding={4}>
-            <VStack gap={3}>
-              <TabList
-                role="tablist"
-                value={mainTab}
-                onChange={(val) => {
-                  setMainTab(val as MainSkillsTab);
-                  setError(null);
-                  setNotice(null);
-                }}
-                size="sm"
-                hasDivider
-              >
-                <Tab
-                  value="installed"
-                  panelId={installedPanelId}
-                  label={`Installed (${state.installedSkills.length})`}
-                />
-                <Tab
-                  value="discover"
-                  panelId={discoverPanelId}
-                  label="Discover (skills.sh)"
-                />
-              </TabList>
+          <LayoutContent padding={4} isScrollable>
+            {preview ? (
+              <VStack gap={3}>
+                <HStack hAlign="between" vAlign="center" gap={2} wrap="wrap">
+                  <Button
+                    label="Back to list"
+                    variant="ghost"
+                    size="sm"
+                    icon={<Icon icon={ArrowLeftIcon} size="sm" />}
+                    onClick={() => setPreview(null)}
+                  />
+                  {renderPreviewAction(preview.target)}
+                </HStack>
 
-              {error && <Banner status="error" title={error} />}
-              {notice && <Banner status="success" title={notice} />}
+                {error && <Banner status="error" title={error} />}
+                {notice && <Banner status="success" title={notice} />}
 
-              {mainTab === "installed" ? (
-                <VStack id={installedPanelId} role="tabpanel" gap={2} height={320} isScrollable>
-                  {state.installedSkills.length === 0 ? (
-                    <EmptyState
-                      isCompact
-                      icon={<Icon icon={SparklesIcon} size="md" color="secondary" />}
-                      title="No skills installed"
-                      description="Switch to Discover to browse or install skills from skills.sh."
+                <VStack gap={0.5}>
+                  <HStack gap={1.5} vAlign="center" wrap="wrap">
+                    <Heading level={4}>{preview.title}</Heading>
+                    <Badge
+                      label={`${preview.files.length} ${preview.files.length === 1 ? "file" : "files"}`}
+                      variant="neutral"
                     />
-                  ) : (
-                    state.installedSkills.map((skill) => {
-                      const key = `${skill.scope}:${skill.name}`;
-                      const isConfirming = pendingDeleteKey === key;
-                      const isDeleting = deletingKey === key;
-                      const isPinned = state.pinnedSkills.includes(skill.name);
-
-                      return (
-                        <Card key={key} padding={3}>
-                          <VStack gap={2}>
-                            <HStack hAlign="between" vAlign="center" gap={2} wrap="wrap">
-                              <HStack gap={1.5} vAlign="center" wrap="wrap">
-                                <Text type="label" weight="semibold">
-                                  {skill.name}
-                                </Text>
-                                <Badge
-                                  label={skill.scope}
-                                  variant={scopeBadgeVariant(skill.scope)}
-                                />
-                                {!skill.deletable && (
-                                  <Badge label="Protected" variant="neutral" />
-                                )}
-                                {isPinned && <Badge label="Pinned" variant="purple" />}
-                              </HStack>
-
-                              <HStack gap={1} vAlign="center">
-                                <Button
-                                  label="Preview"
-                                  variant="ghost"
-                                  size="sm"
-                                  icon={<Icon icon={EyeIcon} size="sm" />}
-                                  isLoading={isLoadingPreview}
-                                  onClick={() => void handlePreviewInstalled(skill)}
-                                />
-                                <Button
-                                  label={isPinned ? "Pinned" : "Pin"}
-                                  variant={isPinned ? "secondary" : "primary"}
-                                  size="sm"
-                                  icon={<Icon icon={BookmarkIcon} size="sm" />}
-                                  onClick={() => handlePinSkill(skill.name)}
-                                />
-                                {skill.deletable &&
-                                  (isConfirming ? (
-                                    <HStack gap={1} vAlign="center">
-                                      <Button
-                                        label="Confirm Delete"
-                                        variant="destructive"
-                                        size="sm"
-                                        isLoading={isDeleting}
-                                        onClick={() => void handleConfirmDelete(skill)}
-                                      />
-                                      <Button
-                                        label="Cancel"
-                                        variant="ghost"
-                                        size="sm"
-                                        isDisabled={isDeleting}
-                                        onClick={() => setPendingDeleteKey(null)}
-                                      />
-                                    </HStack>
-                                  ) : (
-                                    <Button
-                                      label="Delete"
-                                      variant="ghost"
-                                      size="sm"
-                                      icon={<Icon icon={TrashIcon} size="sm" />}
-                                      onClick={() => setPendingDeleteKey(key)}
-                                    />
-                                  ))}
-                              </HStack>
-                            </HStack>
-
-                            {skill.description && (
-                              <Text type="supporting" color="secondary">
-                                {skill.description}
-                              </Text>
-                            )}
-                          </VStack>
-                        </Card>
-                      );
-                    })
-                  )}
+                  </HStack>
+                  <Text type="supporting" color="secondary">
+                    {preview.subtitle}
+                  </Text>
                 </VStack>
-              ) : (
-                <VStack id={discoverPanelId} role="tabpanel" gap={3}>
-                  <HStack hAlign="between" vAlign="center" gap={2} wrap="wrap">
-                    <SegmentedControl
-                      label="Catalog leaderboard"
-                      size="sm"
-                      value={catalogTab}
-                      onChange={(val) => setCatalogTab(val as CatalogTab)}
-                    >
-                      <SegmentedControlItem value="all-time" label="All-Time" />
-                      <SegmentedControlItem value="trending" label="Trending" />
-                      <SegmentedControlItem value="hot" label="Hot" />
-                    </SegmentedControl>
 
-                    <SegmentedControl
-                      label="Install scope"
-                      size="sm"
-                      value={targetScope}
-                      onChange={(val) => setTargetScope(val as InstallTargetScope)}
-                    >
-                      <SegmentedControlItem value="global" label="Global" />
-                      <SegmentedControlItem
-                        value="workspace"
-                        label="This Project"
-                        isDisabled={!state.workspacePath}
-                      />
-                    </SegmentedControl>
-                  </HStack>
+                <CodeBlock
+                  code={preview.content}
+                  language="markdown"
+                  title="SKILL.md"
+                  width="100%"
+                  maxHeight="42dvh"
+                  isWrapped
+                  hasCopyButton
+                />
+              </VStack>
+            ) : (
+              <VStack gap={3}>
+                <TabList
+                  role="tablist"
+                  value={mainTab}
+                  onChange={(val) => {
+                    setMainTab(val as MainSkillsTab);
+                    setError(null);
+                    setNotice(null);
+                  }}
+                  size="sm"
+                  hasDivider
+                >
+                  <Tab
+                    value="installed"
+                    panelId={installedPanelId}
+                    label={`Installed (${state.installedSkills.length})`}
+                  />
+                  <Tab
+                    value="discover"
+                    panelId={discoverPanelId}
+                    label="Discover (skills.sh)"
+                  />
+                </TabList>
 
-                  <VStack width="100%">
-                    <TextInput
-                      type="search"
-                      label="Search skills.sh"
-                      isLabelHidden
-                      width="100%"
-                      value={searchQuery}
-                      onChange={setSearchQuery}
-                      onEnter={() => void runSearch(searchQuery)}
-                      placeholder="Search skills.sh (min 2 characters)..."
-                      startIcon={<Icon icon={MagnifyingGlassIcon} size="sm" />}
-                      hasClear
-                    />
-                  </VStack>
+                {error && <Banner status="error" title={error} />}
+                {notice && <Banner status="success" title={notice} />}
 
-                  <HStack gap={2} vAlign="end" width="100%">
-                    <StackItem size="fill">
-                      <TextInput
-                        label="Direct GitHub install"
-                        width="100%"
-                        value={directSource}
-                        onChange={setDirectSource}
-                        onEnter={() => void handleDirectInstall()}
-                        placeholder="owner/repo or owner/repo@skill-id"
-                      />
-                    </StackItem>
-                    <StackItem size="static">
-                      <IconButton
-                        label="Install"
-                        tooltip="Install from GitHub"
-                        variant="secondary"
-                        size="md"
-                        icon={<Icon icon={ArrowDownTrayIcon} size="sm" />}
-                        isLoading={installingKey === "direct-install"}
-                        isDisabled={!directSource.trim()}
-                        onClick={() => void handleDirectInstall()}
-                      />
-                    </StackItem>
-                  </HStack>
-
-                  <VStack gap={2} height={240} isScrollable>
-                    {isLoadingDiscover && discoverSkills.length === 0 ? (
-                      <Text type="supporting" color="secondary">
-                        Loading skills from skills.sh...
-                      </Text>
-                    ) : discoverSkills.length === 0 ? (
+                {mainTab === "installed" ? (
+                  <VStack id={installedPanelId} role="tabpanel" gap={2} height={320} isScrollable>
+                    {state.installedSkills.length === 0 ? (
                       <EmptyState
                         isCompact
-                        title="No matching skills"
-                        description="Try another query or install directly via owner/repo above."
+                        icon={<Icon icon={SparklesIcon} size="md" color="secondary" />}
+                        title="No skills installed"
+                        description="Switch to Discover to browse or install skills from skills.sh."
                       />
                     ) : (
-                      discoverSkills.map((skill) => {
-                        const key = `${skill.source}:${skill.skill_id}`;
-                        const installedInScope = isRemoteInstalledInTarget(skill);
-                        const isInstalling = installingKey === key;
+                      state.installedSkills.map((skill) => {
+                        const key = `${skill.scope}:${skill.name}`;
+                        const isConfirming = pendingDeleteKey === key;
+                        const isDeleting = deletingKey === key;
+                        const isPinned = state.pinnedSkills.includes(skill.name);
 
                         return (
-                          <Card key={skill.id || key} padding={3}>
-                            <HStack hAlign="between" vAlign="center" gap={2} wrap="wrap">
-                              <VStack gap={0.5}>
+                          <Card key={key} padding={3}>
+                            <VStack gap={2}>
+                              <HStack hAlign="between" vAlign="center" gap={2} wrap="wrap">
                                 <HStack gap={1.5} vAlign="center" wrap="wrap">
                                   <Text type="label" weight="semibold">
                                     {skill.name}
                                   </Text>
-                                  {skill.is_official && (
-                                    <Badge label="Official" variant="info" />
-                                  )}
                                   <Badge
-                                    label={`${formatInstalls(skill.installs)} installs`}
-                                    variant="neutral"
+                                    label={skill.scope}
+                                    variant={scopeBadgeVariant(skill.scope)}
                                   />
+                                  {!skill.deletable && (
+                                    <Badge label="Protected" variant="neutral" />
+                                  )}
+                                  {isPinned && <Badge label="Pinned" variant="purple" />}
                                 </HStack>
-                                <Text type="supporting" color="secondary">
-                                  {skill.source}
-                                </Text>
-                              </VStack>
 
-                              <HStack gap={1} vAlign="center">
-                                <Button
-                                  label="Preview"
-                                  variant="ghost"
-                                  size="sm"
-                                  icon={<Icon icon={EyeIcon} size="sm" />}
-                                  isLoading={isLoadingPreview}
-                                  onClick={() => void handlePreviewRemote(skill)}
-                                />
-                                {installedInScope ? (
-                                  <Badge label="Installed" variant="success" />
-                                ) : (
-                                  <IconButton
-                                    label="Install"
-                                    tooltip={`Install ${skill.name}`}
-                                    variant="primary"
+                                <HStack gap={1} vAlign="center">
+                                  <Button
+                                    label="Preview"
+                                    variant="ghost"
                                     size="sm"
-                                    icon={<Icon icon={ArrowDownTrayIcon} size="sm" />}
-                                    isLoading={isInstalling}
-                                    onClick={() =>
-                                      void handleInstallRemote(skill.source, skill.skill_id, key)
-                                    }
+                                    icon={<Icon icon={EyeIcon} size="sm" />}
+                                    isLoading={isLoadingPreview}
+                                    onClick={() => void handlePreviewInstalled(skill)}
                                   />
-                                )}
+                                  <Button
+                                    label={isPinned ? "Pinned" : "Pin"}
+                                    variant={isPinned ? "secondary" : "primary"}
+                                    size="sm"
+                                    icon={<Icon icon={BookmarkIcon} size="sm" />}
+                                    onClick={() => handlePinSkill(skill.name)}
+                                  />
+                                  {skill.deletable &&
+                                    (isConfirming ? (
+                                      <HStack gap={1} vAlign="center">
+                                        <Button
+                                          label="Confirm Delete"
+                                          variant="destructive"
+                                          size="sm"
+                                          isLoading={isDeleting}
+                                          onClick={() => void handleConfirmDelete(skill)}
+                                        />
+                                        <Button
+                                          label="Cancel"
+                                          variant="ghost"
+                                          size="sm"
+                                          isDisabled={isDeleting}
+                                          onClick={() => setPendingDeleteKey(null)}
+                                        />
+                                      </HStack>
+                                    ) : (
+                                      <Button
+                                        label="Delete"
+                                        variant="ghost"
+                                        size="sm"
+                                        icon={<Icon icon={TrashIcon} size="sm" />}
+                                        onClick={() => setPendingDeleteKey(key)}
+                                      />
+                                    ))}
+                                </HStack>
                               </HStack>
-                            </HStack>
+
+                              {skill.description && (
+                                <Text type="supporting" color="secondary">
+                                  {skill.description}
+                                </Text>
+                              )}
+                            </VStack>
                           </Card>
                         );
                       })
                     )}
-
-                    {searchQuery.trim().length < 2 && catalogPage?.has_more && (
-                      <HStack hAlign="center" paddingBlock={1}>
-                        <Button
-                          label="Load More"
-                          variant="ghost"
-                          size="sm"
-                          isLoading={isLoadingDiscover}
-                          onClick={() => void loadCatalog(catalogTab, catalogPage.page + 1, true)}
-                        />
-                      </HStack>
-                    )}
                   </VStack>
-                </VStack>
-              )}
-
-              {preview && (
-                <>
-                  <Divider />
-                  <VStack gap={2}>
-                    <HStack hAlign="between" vAlign="center">
-                      <VStack gap={0.5}>
-                        <Heading level={4}>{preview.title}</Heading>
-                        <Text type="supporting" color="secondary">
-                          {preview.subtitle}
-                        </Text>
-                      </VStack>
-                      <Button
-                        label="Close Preview"
-                        variant="ghost"
+                ) : (
+                  <VStack id={discoverPanelId} role="tabpanel" gap={3}>
+                    <HStack hAlign="between" vAlign="center" gap={2} wrap="wrap">
+                      <SegmentedControl
+                        label="Catalog leaderboard"
                         size="sm"
-                        onClick={() => setPreview(null)}
-                      />
+                        value={catalogTab}
+                        onChange={(val) => setCatalogTab(val as CatalogTab)}
+                      >
+                        <SegmentedControlItem value="all-time" label="All-Time" />
+                        <SegmentedControlItem value="trending" label="Trending" />
+                        <SegmentedControlItem value="hot" label="Hot" />
+                      </SegmentedControl>
+
+                      <SegmentedControl
+                        label="Install scope"
+                        size="sm"
+                        value={targetScope}
+                        onChange={(val) => setTargetScope(val as InstallTargetScope)}
+                      >
+                        <SegmentedControlItem value="global" label="Global" />
+                        <SegmentedControlItem
+                          value="workspace"
+                          label="This Project"
+                          isDisabled={!state.workspacePath}
+                        />
+                      </SegmentedControl>
                     </HStack>
-                    <CodeBlock
-                      code={preview.content}
-                      language="markdown"
-                      title="SKILL.md"
-                      width="100%"
-                      maxHeight={220}
-                      hasCopyButton
-                    />
+
+                    <VStack width="100%">
+                      <TextInput
+                        type="search"
+                        label="Search skills.sh"
+                        isLabelHidden
+                        width="100%"
+                        value={searchQuery}
+                        onChange={setSearchQuery}
+                        onEnter={() => void runSearch(searchQuery)}
+                        placeholder="Search skills.sh (min 2 characters)..."
+                        startIcon={<Icon icon={MagnifyingGlassIcon} size="sm" />}
+                        hasClear
+                      />
+                    </VStack>
+
+                    <HStack gap={2} vAlign="end" width="100%">
+                      <StackItem size="fill">
+                        <TextInput
+                          label="Direct GitHub install"
+                          width="100%"
+                          value={directSource}
+                          onChange={setDirectSource}
+                          onEnter={() => void handleDirectInstall()}
+                          placeholder="owner/repo or owner/repo@skill-id"
+                        />
+                      </StackItem>
+                      <StackItem size="static">
+                        <IconButton
+                          label="Install"
+                          tooltip="Install from GitHub"
+                          variant="secondary"
+                          size="md"
+                          icon={<Icon icon={ArrowDownTrayIcon} size="sm" />}
+                          isLoading={installingKey === "direct-install"}
+                          isDisabled={!directSource.trim()}
+                          onClick={() => void handleDirectInstall()}
+                        />
+                      </StackItem>
+                    </HStack>
+
+                    <VStack gap={2} height={240} isScrollable>
+                      {isLoadingDiscover && discoverSkills.length === 0 ? (
+                        <Text type="supporting" color="secondary">
+                          Loading skills from skills.sh...
+                                                </Text>
+                      ) : discoverSkills.length === 0 ? (
+                        <EmptyState
+                          isCompact
+                          title="No matching skills"
+                          description="Try another query or install directly via owner/repo above."
+                        />
+                      ) : (
+                        discoverSkills.map((skill) => {
+                          const key = `${skill.source}:${skill.skill_id}`;
+                          const installedInScope = isRemoteInstalledInTarget(skill);
+                          const isInstalling = installingKey === key;
+
+                          return (
+                            <Card key={skill.id || key} padding={3}>
+                              <HStack hAlign="between" vAlign="center" gap={2} wrap="wrap">
+                                <VStack gap={0.5}>
+                                  <HStack gap={1.5} vAlign="center" wrap="wrap">
+                                    <Text type="label" weight="semibold">
+                                      {skill.name}
+                                    </Text>
+                                    {skill.is_official && (
+                                      <Badge label="Official" variant="info" />
+                                    )}
+                                    <Badge
+                                      label={`${formatInstalls(skill.installs)} installs`}
+                                      variant="neutral"
+                                    />
+                                  </HStack>
+                                  <Text type="supporting" color="secondary">
+                                    {skill.source}
+                                  </Text>
+                                </VStack>
+
+                                <HStack gap={1} vAlign="center">
+                                  <Button
+                                    label="Preview"
+                                    variant="ghost"
+                                    size="sm"
+                                    icon={<Icon icon={EyeIcon} size="sm" />}
+                                    isLoading={isLoadingPreview}
+                                    onClick={() => void handlePreviewRemote(skill)}
+                                  />
+                                  {installedInScope ? (
+                                    <Badge label="Installed" variant="success" />
+                                  ) : (
+                                    <IconButton
+                                      label="Install"
+                                      tooltip={`Install ${skill.name}`}
+                                      variant="primary"
+                                      size="sm"
+                                      icon={<Icon icon={ArrowDownTrayIcon} size="sm" />}
+                                      isLoading={isInstalling}
+                                      onClick={() =>
+                                        void handleInstallRemote(skill.source, skill.skill_id, key)
+                                      }
+                                    />
+                                  )}
+                                </HStack>
+                              </HStack>
+                            </Card>
+                          );
+                        })
+                      )}
+
+                      {searchQuery.trim().length < 2 && catalogPage?.has_more && (
+                        <HStack hAlign="center" paddingBlock={1}>
+                          <Button
+                            label="Load More"
+                            variant="ghost"
+                            size="sm"
+                            isLoading={isLoadingDiscover}
+                            onClick={() => void loadCatalog(catalogTab, catalogPage.page + 1, true)}
+                          />
+                        </HStack>
+                      )}
+                    </VStack>
                   </VStack>
-                </>
-              )}
-            </VStack>
+                )}
+              </VStack>
+            )}
           </LayoutContent>
         }
         footer={
           <LayoutFooter hasDivider>
-            <HStack hAlign="between" vAlign="center" width="100%">
-              <Text type="supporting" color="secondary">
-                Tip: Pin a skill or type /skill-name at the start of a message.
-              </Text>
-              <Button label="Done" variant="secondary" onClick={actions.closeSkills} />
+            <HStack hAlign="between" vAlign="center" gap={2} width="100%">
+              <StackItem size="fill">
+                <Text type="supporting" color="secondary">
+                  Tip: Pin a skill or type /skill-name at the start of a message.
+                </Text>
+              </StackItem>
+              <StackItem size="static">
+                <Button label="Done" variant="secondary" onClick={actions.closeSkills} />
+              </StackItem>
             </HStack>
           </LayoutFooter>
         }

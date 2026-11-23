@@ -37,23 +37,16 @@ _BLOCK_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 )
 
 _DESTRUCTIVE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"(?:^|[;&|\s])rm(?:\s|$)"), "File deletion requires approval"),
-    (re.compile(r"(?:^|[;&|\s])mv(?:\s|$)"), "File move/rename requires approval"),
-    (re.compile(r"(?:^|[;&|\s])(?:chmod|chown)(?:\s|$)"), "Permission change requires approval"),
+    (re.compile(r"(?:^|[;&|\s])(?:rm|rmdir)(?:\s|$)"), "File/directory deletion requires approval"),
     (
         re.compile(r"\bgit\s+(?:push|reset|clean|rebase|force-push)\b"),
         "Mutating git remote/history command requires approval",
     ),
     (
-        re.compile(r"\bgit\s+checkout\s+--(?:\s|$)"),
+        re.compile(r"\bgit\s+(?:checkout\s+--(?:\s|$)|restore\s+(?!--staged\b))"),
         "Discarding working tree changes requires approval",
     ),
-    (
-        re.compile(r"(?:^|[;&|\s])(?:kill|pkill|killall)(?:\s|$)"),
-        "Process termination requires approval",
-    ),
-    (re.compile(r"\bnpm\s+(?:i|install)\s+-g\b"), "Global package install requires approval"),
-    (re.compile(r"\bpip\s+install\s+--user\b"), "User-wide pip install requires approval"),
+    (re.compile(r"(?:^|[;&|\s])chown(?:\s|$)"), "Ownership change requires approval"),
 )
 
 _VERIFICATION_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -89,9 +82,6 @@ _SECRET_OUTPUT_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 
-_SHELL_META_RE = re.compile(r"[;&|><`$]")
-
-
 class ShellGuard:
     """Evaluates shell commands against hard deny rules, verification policies, and HITL gates."""
 
@@ -120,22 +110,13 @@ class ShellGuard:
             if pattern.search(normalized):
                 return ShellVerdict(ShellAction.REQUIRE_APPROVAL, reason)
 
-        if mode == "plan":
-            if (
-                plan_approved
-                and self.is_verification_command(normalized)
-                and not _SHELL_META_RE.search(normalized)
-            ):
-                return ShellVerdict(
-                    ShellAction.ALLOW,
-                    "Pure verification command allowed after plan approval.",
-                )
+        if mode == "plan" and not plan_approved:
             return ShellVerdict(
                 ShellAction.REQUIRE_APPROVAL,
                 "Plan mode requires explicit approval before running shell commands.",
             )
 
-        return ShellVerdict(ShellAction.ALLOW, "Safe command allowed in Auto mode.")
+        return ShellVerdict(ShellAction.ALLOW, "Safe command allowed.")
 
     @staticmethod
     def is_verification_command(command: str) -> bool:

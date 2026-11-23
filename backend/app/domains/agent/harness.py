@@ -6,14 +6,17 @@ import inspect
 import logging
 from collections import OrderedDict
 from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import aiosqlite
 from deepagents import create_deep_agent
 from deepagents.middleware.filesystem import FilesystemPermission
 from langchain.agents.middleware import TodoListMiddleware
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 
@@ -46,11 +49,40 @@ from backend.app.domains.agent.subagents import build_subagents
 from backend.app.domains.agent.tools.ask_user import build_ask_user_tool
 from backend.app.domains.artifacts.entities import ArtifactKind
 from backend.app.domains.artifacts.store import ArtifactStore
-from backend.app.shared.config import AppConfig
+from backend.app.shared.config import AppConfig, normalize_sqlite_journal_mode
 from backend.app.shared.errors import PathEscapeError
 from backend.app.shared.llm_credentials import LLMCredentials
 
 logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def open_checkpointer(
+    sqlite_path: Path,
+    *,
+    journal_mode: str = "WAL",
+    busy_timeout_ms: int = 15_000,
+) -> AsyncIterator[AsyncSqliteSaver]:
+    """Open AsyncSqliteSaver and enforce journal_mode after setup() (avoids WAL override)."""
+    mode = normalize_sqlite_journal_mode(journal_mode)
+    sync_mode = "FULL" if mode == "DELETE" else "NORMAL"
+    timeout_sec = max(5.0, busy_timeout_ms / 1000.0)
+    async with aiosqlite.connect(sqlite_path, timeout=timeout_sec) as conn:
+        await conn.execute(f"PRAGMA busy_timeout={busy_timeout_ms};")
+        saver = AsyncSqliteSaver(conn)
+        await saver.setup()
+        await conn.execute(f"PRAGMA busy_timeout={busy_timeout_ms};")
+        async with conn.execute(f"PRAGMA journal_mode={mode};") as cur:
+            row = await cur.fetchone()
+            actual = str(row[0]).upper() if row and row[0] else ""
+        if actual != mode:
+            raise RuntimeError(
+                f"Failed to set LangGraph checkpointer journal_mode='{mode}' "
+                f"(effective='{actual}') at '{sqlite_path}'."
+            )
+        await conn.execute(f"PRAGMA synchronous={sync_mode};")
+        await conn.commit()
+        yield saver
 
 _ASK_PERMISSIONS = [
     FilesystemPermission(operations=["write"], paths=["/artifacts/**"], mode="allow"),

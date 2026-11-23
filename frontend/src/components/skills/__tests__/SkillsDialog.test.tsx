@@ -170,14 +170,18 @@ describe("SkillsDialog", () => {
     const deleteButtons = screen.getAllByRole("button", { name: "Delete" });
     expect(deleteButtons).toHaveLength(1);
 
-    // Preview global skill
+    // Preview global skill opens dedicated full-view reader
     const previewButtons = screen.getAllByRole("button", { name: "Preview" });
     fireEvent.click(previewButtons[1]);
     await screen.findByText(/# React Patterns/);
     expect(detailSpy).toHaveBeenCalledWith("global", "react-patterns", "/repo");
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+
+    // Return to skill list via Back to list
+    fireEvent.click(screen.getByRole("button", { name: "Back to list" }));
 
     // Inline delete confirmation
-    fireEvent.click(deleteButtons[0]);
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     const confirmBtn = screen.getByRole("button", { name: "Confirm Delete" });
     fireEvent.click(confirmBtn);
 
@@ -269,14 +273,13 @@ describe("SkillsDialog", () => {
       expect(searchSpy).toHaveBeenCalledWith("tdd", 20, "/repo");
     });
 
-    // Preview remote skill
+    // Preview remote skill opens dedicated reader and supports direct Install from reader
     fireEvent.click(screen.getByRole("button", { name: "Preview" }));
     await screen.findByText(/Write failing test first\./);
     expect(previewRemoteSpy).toHaveBeenCalledWith("acme/skills", "tdd-guide");
 
-    // Install into workspace scope (there are two Install buttons: direct bar + card)
-    const installButtons = screen.getAllByRole("button", { name: "Install" });
-    fireEvent.click(installButtons[installButtons.length - 1]);
+    // Install into workspace scope directly from the dedicated preview header
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
 
     await waitFor(() => {
       expect(installSpy).toHaveBeenCalledWith({

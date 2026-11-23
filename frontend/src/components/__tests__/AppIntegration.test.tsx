@@ -524,4 +524,121 @@ describe("App + LiveWorkspaceProvider end-to-end integration", () => {
     expect(document.body.textContent).not.toContain("ALPHASTREAMTOKEN");
     expect(document.body.textContent).not.toContain("ALPHALEAKEDSECRET");
   });
+
+  it("dismisses ShellApprovalCard immediately upon clicking Approve while resume SSE is still streaming", async () => {
+    window.localStorage.setItem(
+      SETTINGS_STORAGE_KEY,
+      JSON.stringify({
+        baseUrl: "http://127.0.0.1:8099/v1",
+        model: "qwen3.8-flash",
+        apiKey: "sk-shell-approve-test",
+        enableThinking: true,
+      }),
+    );
+
+    const project = {
+      id: "proj-shell",
+      name: "repo",
+      path: "/repo",
+      is_git_repo: true,
+      branch: "main",
+      created_at: "2026-11-23T00:00:00Z",
+      updated_at: "2026-11-23T00:00:00Z",
+    };
+    let currentSession: Record<string, unknown> = {
+      id: "sess-shell",
+      project_id: "proj-shell",
+      title: "Cleanup Task",
+      workspace_path: "/repo",
+      mode: "auto",
+      status: "awaiting_approval",
+      pending_interrupt: {
+        kind: "shell_approval",
+        command: "rm -f stale.tmp",
+        reason: "File/directory deletion requires approval",
+        workspace: "/repo",
+      },
+      created_at: "2026-11-23T00:00:00Z",
+      updated_at: "2026-11-23T00:00:00Z",
+    };
+
+    const enc = new TextEncoder();
+    let resumeController: ReadableStreamDefaultController<Uint8Array> | null = null;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/projects") return jsonResponse([project]);
+        if (url === "/api/sessions") return jsonResponse([currentSession]);
+        if (url.startsWith("/api/skills/installed")) return jsonResponse([]);
+        if (url.startsWith("/api/workspace/tree")) return jsonResponse([]);
+        if (url.startsWith("/api/workspace/validate")) {
+          return jsonResponse({ path: "/repo", name: "repo", is_git_repo: true, branch: "main" });
+        }
+        if (url.startsWith("/api/workspace/diff")) {
+          return jsonResponse({ workspace_path: "/repo", branch: "main", git_head: "abc", files: [] });
+        }
+        if (url === "/api/sessions/sess-shell/artifacts") {
+          return jsonResponse({ artifacts: [], walkthrough_plan: null });
+        }
+        if (url.startsWith("/api/sessions/sess-shell")) {
+          if (url === "/api/sessions/sess-shell/resume") {
+            currentSession = {
+              ...currentSession,
+              status: "idle",
+              pending_interrupt: null,
+            };
+            const stream = new ReadableStream<Uint8Array>({
+              start(ctrl) {
+                resumeController = ctrl;
+                ctrl.enqueue(enc.encode('event: token\ndata: {"text":"Removing stale.tmp..."}\n\n'));
+              },
+            });
+            return new Response(stream, { status: 200 });
+          }
+          return jsonResponse({
+            session: currentSession,
+            messages: [
+              {
+                id: "u-shell",
+                session_id: "sess-shell",
+                role: "user",
+                content: "Clean up stale.tmp",
+                thinking: "",
+                tool_calls: [],
+                created_at: "2026-11-23T00:00:01Z",
+              },
+            ],
+            has_more_messages: false,
+          });
+        }
+        return jsonResponse({});
+      }),
+    );
+
+    render(
+      <Theme theme={themes[defaultThemeSlug]}>
+        <App />
+      </Theme>,
+    );
+
+    await screen.findByText("Shell command approval required");
+    expect(screen.getByText("rm -f stale.tmp")).toBeInTheDocument();
+
+    // Click Approve -> banner MUST disappear immediately even BEFORE resumeController closes!
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+    await waitFor(() => {
+      expect(screen.queryByText("Shell command approval required")).not.toBeInTheDocument();
+      expect(document.body.textContent).toContain("Removing stale.tmp...");
+    });
+
+    // Finish the stream cleanly
+    await act(async () => {
+      resumeController?.enqueue(enc.encode('event: done\ndata: {"session_id":"sess-shell"}\n\n'));
+      resumeController?.close();
+      await Promise.resolve();
+    });
+  });
 });

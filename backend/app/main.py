@@ -7,9 +7,8 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-from backend.app.domains.agent.harness import DeepAgentHarness
+from backend.app.domains.agent.harness import DeepAgentHarness, open_checkpointer
 from backend.app.domains.agent.model_adapter import ModelFactory
 from backend.app.domains.agent.router import router as workspace_router
 from backend.app.domains.agent.workspace import WorkspaceInspector
@@ -37,25 +36,33 @@ def create_app(
     model_factory: ModelFactory | None = None,
 ) -> FastAPI:
     """Construct the FastAPI application with async SQLite persistence."""
-    app_config = config or AppConfig.from_repo_root()
-    frontend_mounted = app_config.frontend_dist_dir.is_dir()
+    static_dist_dir = (config or AppConfig.from_repo_root()).frontend_dist_dir
+    frontend_mounted = static_dist_dir.is_dir()
 
     @asynccontextmanager
     async def lifespan(fastapi_app: FastAPI) -> AsyncIterator[None]:
         configure_logging()
+        app_config = config or AppConfig.from_repo_root()
         app_config.ensure_directories()
-        session_repo = SQLiteSessionRepository(app_config.sqlite_path)
-        await session_repo.initialize()
-        artifact_store = ArtifactStore(app_config.artifacts_root)
-        workspace_inspector = WorkspaceInspector()
-        resolved_model_factory = model_factory or ModelFactory()
-        skill_store = SkillStore(
-            bundled_dir=app_config.bundled_skills_dir,
-            global_dir=app_config.skills_root,
-            registry_client=SkillsShClient(),
-        )
+        app_config.verify_storage_writable()
 
-        async with AsyncSqliteSaver.from_conn_string(str(app_config.sqlite_path)) as checkpointer:
+        async with open_checkpointer(
+            app_config.sqlite_path,
+            journal_mode=app_config.sqlite_journal_mode,
+        ) as checkpointer:
+            session_repo = SQLiteSessionRepository(
+                app_config.sqlite_path,
+                journal_mode=app_config.sqlite_journal_mode,
+            )
+            await session_repo.initialize()
+            artifact_store = ArtifactStore(app_config.artifacts_root)
+            workspace_inspector = WorkspaceInspector()
+            resolved_model_factory = model_factory or ModelFactory()
+            skill_store = SkillStore(
+                bundled_dir=app_config.bundled_skills_dir,
+                global_dir=app_config.skills_root,
+                registry_client=SkillsShClient(),
+            )
             harness = DeepAgentHarness(
                 config=app_config,
                 artifact_store=artifact_store,
@@ -90,6 +97,7 @@ def create_app(
                     "version": APP_VERSION,
                     "data_dir": str(app_config.data_dir),
                     "sqlite_path": str(app_config.sqlite_path),
+                    "sqlite_journal_mode": app_config.sqlite_journal_mode,
                     "frontend_mounted": frontend_mounted,
                 },
             )
@@ -112,7 +120,7 @@ def create_app(
     fastapi_app.include_router(skills_router)
 
     if frontend_mounted:
-        fastapi_app.frontend("/", directory=str(app_config.frontend_dist_dir))
+        fastapi_app.frontend("/", directory=str(static_dist_dir))
 
     return fastapi_app
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import os
 import re
 import tarfile
 from collections.abc import Mapping
@@ -27,7 +28,7 @@ from backend.app.domains.skills.frontmatter import (
 )
 from backend.app.shared.errors import DomainError
 
-SKILLS_SH_BASE_URL = "https://skills.sh"
+SKILLS_SH_BASE_URL = "http://skills.sh"
 CODELOAD_BASE_URL = "https://codeload.github.com"
 
 logger = logging.getLogger(__name__)
@@ -410,29 +411,65 @@ def _parse_remote_skill(item: Mapping[str, object]) -> RemoteSkillSummary | None
     )
 
 
+def _swap_http_scheme(base_url: str) -> str | None:
+    if base_url.startswith("http://"):
+        return "https://" + base_url.removeprefix("http://")
+    if base_url.startswith("https://"):
+        return "http://" + base_url.removeprefix("https://")
+    return None
+
+
 class SkillsShClient:
     """Async HTTP client for skills.sh public APIs and GitHub codeload tarballs."""
 
     def __init__(
         self,
         *,
-        skills_sh_base_url: str = SKILLS_SH_BASE_URL,
-        codeload_base_url: str = CODELOAD_BASE_URL,
+        skills_sh_base_url: str | None = None,
+        codeload_base_url: str | None = None,
+        verify_ssl: bool = False,
         timeout: float = 20.0,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        self._skills_sh_base_url = skills_sh_base_url.rstrip("/")
-        self._codeload_base_url = codeload_base_url.rstrip("/")
+        env_skills = os.environ.get("SKILLS_SH_BASE_URL", "").strip()
+        env_codeload = os.environ.get("SKILLS_CODELOAD_BASE_URL", "").strip()
+        resolved_skills = skills_sh_base_url or env_skills or SKILLS_SH_BASE_URL
+        resolved_codeload = codeload_base_url or env_codeload or CODELOAD_BASE_URL
+        self._skills_sh_base_url = resolved_skills.rstrip("/")
+        self._codeload_base_url = resolved_codeload.rstrip("/")
+        self._allow_scheme_fallback = skills_sh_base_url is None and not env_skills
+        self._verify_ssl = verify_ssl
         self._timeout = timeout
         self._transport = transport
 
     def _new_client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(
             trust_env=False,
+            verify=self._verify_ssl,
             timeout=self._timeout,
             follow_redirects=True,
             transport=self._transport,
         )
+
+    async def _request_skills_sh(
+        self,
+        path: str,
+        *,
+        params: Mapping[str, str] | None = None,
+    ) -> httpx.Response:
+        primary_url = f"{self._skills_sh_base_url}{path}"
+        async with self._new_client() as client:
+            try:
+                return await client.get(primary_url, params=params)
+            except httpx.HTTPError:
+                fallback_base = (
+                    _swap_http_scheme(self._skills_sh_base_url)
+                    if self._allow_scheme_fallback
+                    else None
+                )
+                if fallback_base is None:
+                    raise
+                return await client.get(f"{fallback_base}{path}", params=params)
 
     async def browse(
         self,
@@ -451,10 +488,8 @@ class SkillsShClient:
                 status_code=400,
                 code="INVALID_CATALOG_PAGE",
             )
-        url = f"{self._skills_sh_base_url}/api/skills/{tab}/{page}"
         try:
-            async with self._new_client() as client:
-                resp = await client.get(url)
+            resp = await self._request_skills_sh(f"/api/skills/{tab}/{page}")
         except httpx.HTTPError as exc:
             logger.warning(
                 "skills.registry_unavailable",
@@ -524,10 +559,11 @@ class SkillsShClient:
                 code="INVALID_SEARCH_QUERY",
             )
         safe_limit = max(1, min(limit, 100))
-        url = f"{self._skills_sh_base_url}/api/search"
         try:
-            async with self._new_client() as client:
-                resp = await client.get(url, params={"q": clean_q, "limit": str(safe_limit)})
+            resp = await self._request_skills_sh(
+                "/api/search",
+                params={"q": clean_q, "limit": str(safe_limit)},
+            )
         except httpx.HTTPError as exc:
             logger.warning(
                 "skills.registry_unavailable",

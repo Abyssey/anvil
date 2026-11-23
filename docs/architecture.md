@@ -26,7 +26,8 @@ flowchart TD
 - **순수 표준 라이브러리 모듈**: `shell_guard.py`, `walkthrough_diff.py`, `shared/logging.py`는 외부 패키지 의존성 없이 Python 표준 라이브러리만 사용합니다.
 - **순수 엔티티**: 각 도메인의 `entities.py`는 표준 라이브러리 + `pydantic`만 허용합니다.
 - **도메인 격리**: `artifacts` 도메인은 LangGraph/DeepAgents/FastAPI를 전혀 알지 못하며, `skills` 도메인은 다른 도메인에 의존하지 않습니다. 모든 `router.py`는 얇은 HTTP 어댑터 역할만 수행합니다.
-- **브랜드와 인프라 분리**: 브랜드 이름(`APP_NAME = "Anvil"`)은 표시·페르소나 상수로만 격리하고, 저장 경로(`.data/sessions.db`), 환경변수(`LOG_LEVEL`), `localStorage` 키, 테마(`workbench`)는 모두 역할 기반 이름을 사용합니다.
+- **브랜드와 인프라 분리**: 브랜드 이름(`APP_NAME = "Anvil"`)은 표시·페르소나 상수로만 격리하고, 저장 경로(`.data/sessions.db`), 환경변수(`DATA_DIR`, `SQLITE_JOURNAL_MODE`, `LOG_LEVEL`), `localStorage` 키, 테마(`workbench`)는 모두 역할 기반 이름을 사용합니다.
+- **로컬 및 AWX NAS 영속성 (`DATA_DIR` · `SQLITE_JOURNAL_MODE`)**: 로컬 기본값은 `.data` + `WAL`이며, Agentic Works(AWX) Pod에서는 NAS 절대 경로 + `DELETE` 모드를 환경변수로 주입합니다. 기동 시 `verify_storage_writable()`로 경로 쓰기 가능 여부를 선검증해 실패 시 즉시 기동을 중단하고, `open_checkpointer()`가 `AsyncSqliteSaver.setup()` 직후 `PRAGMA journal_mode`를 덮어써 대화 DB와 LangGraph 체크포인터 모두 동일한 저널 모드를 유지합니다.
 
 ---
 

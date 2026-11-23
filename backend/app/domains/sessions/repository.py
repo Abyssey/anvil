@@ -21,6 +21,7 @@ from backend.app.domains.sessions.entities import (
     SessionStatus,
     ToolCallRecord,
 )
+from backend.app.shared.config import normalize_sqlite_journal_mode
 from backend.app.shared.errors import DomainError, ProjectNotFoundError, SessionNotFoundError
 
 
@@ -55,21 +56,43 @@ class SessionRepository(Protocol):
 class SQLiteSessionRepository:
     """Async SQLite repository persisting sessions, transcripts, and pending interrupts."""
 
-    def __init__(self, db_path: Path) -> None:
+    def __init__(
+        self,
+        db_path: Path,
+        *,
+        journal_mode: str = "WAL",
+        busy_timeout_ms: int = 15_000,
+    ) -> None:
         self._db_path = db_path
+        self._journal_mode = normalize_sqlite_journal_mode(journal_mode)
+        self._busy_timeout_ms = max(1_000, busy_timeout_ms)
+        self._synchronous = "FULL" if self._journal_mode == "DELETE" else "NORMAL"
 
     @asynccontextmanager
     async def _connect(self) -> AsyncIterator[aiosqlite.Connection]:
-        async with aiosqlite.connect(self._db_path) as db:
+        timeout_sec = max(5.0, self._busy_timeout_ms / 1000.0)
+        async with aiosqlite.connect(self._db_path, timeout=timeout_sec) as db:
             db.row_factory = aiosqlite.Row
             await db.execute("PRAGMA foreign_keys=ON;")
-            await db.execute("PRAGMA busy_timeout=5000;")
+            await db.execute(f"PRAGMA busy_timeout={self._busy_timeout_ms};")
+            await db.execute(f"PRAGMA synchronous={self._synchronous};")
             yield db
 
     async def initialize(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         async with self._connect() as db:
-            await db.execute("PRAGMA journal_mode=WAL;")
+            async with db.execute("PRAGMA journal_mode;") as cur:
+                cur_row = await cur.fetchone()
+                current_mode = str(cur_row[0]).upper() if cur_row and cur_row[0] else ""
+            if current_mode != self._journal_mode:
+                async with db.execute(f"PRAGMA journal_mode={self._journal_mode};") as mcur:
+                    set_row = await mcur.fetchone()
+                    current_mode = str(set_row[0]).upper() if set_row and set_row[0] else ""
+            if current_mode != self._journal_mode:
+                raise RuntimeError(
+                    f"Failed to configure SQLite journal_mode='{self._journal_mode}' "
+                    f"(effective='{current_mode}') for '{self._db_path}'."
+                )
             await db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS projects (
