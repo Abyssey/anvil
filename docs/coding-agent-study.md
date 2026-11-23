@@ -8,15 +8,15 @@
 
 ## 구현 배경 및 학습 목표
 
-일반 챗봇이나 정해진 순서대로 흐르는 파이프라인(RAG · 고정 워크플로우)과 달리, 코딩 에이전트는 **파일시스템을 직접 변경하고 OS 프로세스를 실행하며 작은 실수도 즉시 문법 에러나 런타임 실패로 되돌아오는 환경**에서 동작합니다. 자율 에이전트 시스템의 핵심 난제가 한곳에 모여 있어, 이번 구현에서는 아래 엔지니어링 주제들을 직접 부딪히며 익히는 것을 목표로 삼았습니다.
+일반 챗봇이나 정해진 순서대로 흐르는 파이프라인(RAG[^1] · 고정 워크플로우)과 달리, 코딩 에이전트는 **파일시스템을 직접 변경하고 OS 프로세스를 실행하며 작은 실수도 즉시 문법 에러나 런타임 실패로 되돌아오는 환경**에서 동작합니다. 자율 에이전트 시스템의 핵심 난제가 한곳에 모여 있어, 이번 구현에서는 아래 엔지니어링 주제들을 직접 부딪히며 익히는 것을 목표로 삼았습니다.
 
 - **Context Engineering과 점진적 탐색 (`Progressive Disclosure`)**
   - 수만 줄짜리 코드베이스를 프롬프트에 통째로 넣을 수 없으므로, 디렉터리 확인(`ls`) → 키워드 검색(`grep`) → 필요한 라인 구간 읽기(`read_file`) 순으로 최소 토큰만 쓰며 맥락을 좁혀 가는 구조를 설계합니다.
-  - 시스템 프롬프트 앞단을 고정해 `Prompt Prefix Caching` 적중률을 유지하고, 대량 파일 열람은 독립된 `Subagent` 루프로 격리해 메인 대화의 문맥 오염(`Context Rot`)을 막습니다.
-- **에이전트 친화적 도구 설계 (`ACI: Agent-Computer Interface`)**
+  - 시스템 프롬프트 앞단을 고정해 `Prompt Prefix Caching`[^2] 적중률을 유지하고, 대량 파일 열람은 독립된 `Subagent` 루프로 격리해 메인 대화의 문맥 오염(`Context Rot`)을 막습니다.
+- **에이전트 친화적 도구 설계 (`ACI: Agent-Computer Interface`)**[^3]
   - 파일 전체를 덮어쓰게(`write_file`) 두면 토큰 낭비와 코드 유실이 발생하고, 줄 번호 기반 수정은 번호가 밀리며 깨집니다. 고유 문자열 매칭 기반의 부분 치환(`edit_file`) 도구를 두고, 실패 시 프로세스를 중단하는 대신 모델이 다음 턴에 스스로 인자를 고쳐 재시도(`Self-Healing`)할 수 있도록 에러 피드백(`ToolMessage`)을 설계합니다.
 - **동적 상태 머신 · 실행 격리 · 일관성 복구 (`Suspend / Resume` & `Revert`)**
-  - 정해진 단방향 그래프가 아니라 조건에 따라 분기하고 멈췄다 다시 도는 자율 루프를 제어합니다. 동일 실패 반복을 끊는 `3-Strike` 가드레일, 위험 명령 직전 상태를 직렬화해 멈췄다 이어 달리는 `Human-in-the-Loop`(`interrupt()`), 상위 디렉터리 침범(`Path Traversal`) 방어와 서브프로세스 타임아웃 격리, 그리고 잘못된 턴을 파일·DB·그래프 기억까지 함께 되감는 `Revert`를 구현합니다.
+  - 정해진 단방향 그래프가 아니라 조건에 따라 분기하고 멈췄다 다시 도는 자율 루프를 제어합니다. 동일 실패 반복을 끊는 `3-Strike` 가드레일, 위험 명령 직전 상태를 직렬화해 멈췄다 이어 달리는 `Human-in-the-Loop`(`interrupt()`), 상위 디렉터리 침범(`Path Traversal`)[^4] 방어와 서브프로세스 타임아웃 격리, 그리고 잘못된 턴을 파일·DB·그래프 기억까지 함께 되감는 `Revert`를 구현합니다.
 
 | 영역 | 일반 챗봇 · 고정 파이프라인(RAG) | 코딩 에이전트 직접 구현 |
 | :--- | :--- | :--- |
@@ -108,7 +108,7 @@ flowchart LR
 | 영역 | `LangGraph` / `LangChain` / `deepagents` 제공 | 직접 구현 (Custom) |
 | :--- | :--- | :--- |
 | **모델 호출** | `ChatOpenAI` 기본 클라이언트 | `ReasoningChatOpenAI` (`reasoning_content` 파싱 · 미지원 옵션 폴백), `ModelFactory` (공용 `httpx` 풀 관리) |
-| **파일 · 셸 도구** | `ls`, `glob`, `grep`, `read_file`, `write_file`, `edit_file`, `execute` 도구 스키마 및 정적 `CompositeBackend` · `LocalShellBackend` | 요청별 `ContextVar`로 경로를 동적 바인딩하는 `DynamicRunBackend` · `DynamicGuardedShellBackend`, 위험 명령 판정기 `ShellGuard`, 멀티 스코프 스킬 병합기 `SkillFiles` |
+| **파일 · 셸 도구** | `ls`, `glob`, `grep`, `read_file`, `write_file`, `edit_file`, `execute` 도구 스키마 및 정적 `CompositeBackend` · `LocalShellBackend` | 요청별 `ContextVar`[^5]로 경로를 동적 바인딩하는 `DynamicRunBackend` · `DynamicGuardedShellBackend`, 위험 명령 판정기 `ShellGuard`, 멀티 스코프 스킬 병합기 `SkillFiles` |
 | **컨텍스트 · 메모리** | `AgentMiddleware` 훅 인터페이스, `TodoListMiddleware`, 기본 `MemoryMiddleware` | `RunPromptMiddleware` (Prefix Cache 순서 조립), `DynamicMemoryMiddleware` (매 턴 디스크 재로드 확장), `SubdirAgentsReadMiddleware` (하위 폴더 규칙 지연 주입), 내장 `SKILL.md` 및 `skills.sh` 설치기 |
 | **서브에이전트** | `task` 도구 실행 메커니즘 | `explorer` · `reviewer` 프롬프트/스펙 정의, `ReadOnlyToolGuardMiddleware` (쓰기 원천 차단), `lc_subagent_tool_call_id` 부모-자식 스트림 매핑 |
 | **제어 · 복구** | `StateGraph`, `AsyncSqliteSaver` 체크포인터, `interrupt()` / `Command(resume=...)` 프리미티브 | `ask_user` 질문 도구, `VerificationLoopMiddleware` (3-Strike · 스탬프 관리), `ArtifactWorkflowMiddleware` (`Plan` 승인 · 검증 규칙 파일 보호), `TurnCheckpointStore` (SHA-256 파일 스냅샷) 및 파일·DB·기억 동기화 `Revert` |
@@ -133,14 +133,14 @@ flowchart LR
 ```
 
 LLM API는 두 가지 근본 제약을 가집니다.
-- 이전 요청을 기억하지 못하는 **Stateless HTTP 함수**입니다.
+- 이전 요청을 기억하지 못하는 **Stateless**[^6] HTTP 함수입니다.
 - 로컬 파일을 열거나 터미널 명령을 직접 실행할 수 없고, 오직 토큰을 입력받아 다음 토큰만 생성합니다.
 
 이 제약을 넘어 `"테스트 에러 원인 찾아 고쳐줘"`를 수행하게 만드는 핵심 장치가 HTTP 요청의 `tools` 스키마와 백엔드의 `while` 루프입니다.
 
 ### 1-1. `/v1/chat/completions` 요청과 `<tools>` / `<tool_call>`
 
-백엔드가 LLM 엔드포인트(`POST /v1/chat/completions`)를 호출할 때 대화 내역(`messages`)과 함께 백엔드가 실행 가능한 함수 명세(`tools` JSON Schema)를 전달합니다.
+백엔드가 LLM 엔드포인트(`POST /v1/chat/completions`)를 호출할 때 대화 내역(`messages`)과 함께 백엔드가 실행 가능한 함수 명세(`tools` JSON Schema[^7])를 전달합니다.
 
 ```json
 {
@@ -317,7 +317,7 @@ flowchart LR
 
 에이전트는 소스 코드 외에도 계획서(`implementation_plan.md`), 할 일 목록(`task.md`), 프로젝트 메모(`AGENTS.md`), 스킬 문서를 읽고 씁니다. 이 파일들을 사용자의 실제 Git 저장소에 직접 쓰면 작업 트리가 오염됩니다.
 
-`deepagents`는 경로 접두사별로 백엔드를 나누는 `CompositeBackend` 베이스 클래스를 제공하지만, 생성 시점에 단일 경로가 고정되어 여러 세션이 공유하는 웹 서버에서는 그대로 쓸 수 없습니다. 이를 상속해 실행 중인 세션의 `RunContext`(`ContextVar`)에 맞춰 물리 폴더를 실시간 연결하는 `DynamicRunBackend`(`domains/agent/run_backends.py`)를 직접 구현했습니다.
+`deepagents`는 경로 접두사별로 백엔드를 나누는 `CompositeBackend` 베이스 클래스를 제공하지만, 생성 시점에 단일 경로가 고정되어 여러 세션이 공유하는 웹 서버에서는 그대로 쓸 수 없습니다. 이를 상속해 실행 중인 세션의 `RunContext`(`ContextVar`[^5])에 맞춰 물리 폴더를 실시간 연결하는 `DynamicRunBackend`(`domains/agent/run_backends.py`)를 직접 구현했습니다.
 
 ```mermaid
 flowchart LR
@@ -349,7 +349,7 @@ flowchart LR
 
 루프가 길어질수록 두 가지 문제가 생깁니다.
 - **Context Rot**: 규칙 문서, 수십 개의 도구 스키마, 탐색 결과가 한데 뒤섞이면 모델이 핵심 지시를 놓치기 시작합니다.
-- **Prefix Cache 깨짐**: 시스템 프롬프트 앞부분이 조금만 달라져도 추론 서버가 이전 KV Cache를 재사용하지 못해 응답 지연과 비용이 늘어납니다.
+- **Prefix Cache 깨짐**: 시스템 프롬프트 앞부분이 조금만 달라져도 추론 서버가 이전 KV Cache[^2]를 재사용하지 못해 응답 지연과 비용이 늘어납니다.
 
 클로드 코드(Claude Code) 등 최근 코딩 에이전트들이 채택한 Context Engineering 기법 세 가지를 커스텀 미들웨어와 스킬 스토어로 구현했습니다.
 
@@ -516,7 +516,7 @@ sequenceDiagram
 
 멀티턴 작업 중 *"턴 1의 미커밋 코드는 살리고, 방금 실패한 턴 2만 되돌리고 싶다"*는 상황에서 `git checkout -- .`을 쓰면 턴 1 작업까지 사라집니다. 또한 **디스크 파일만 복구하고 LangGraph 체크포인터 속 대화 기억을 그대로 두면, 모델은 다음 턴에 이미 지워진 턴 2 코드가 여전히 존재하는 줄 알고 환각(Hallucination)을 일으킵니다.**
 
-LangGraph는 파일 롤백 기능을 제공하지 않으므로, Content-Addressed 파일 스냅샷 엔진인 `TurnCheckpointStore`(`domains/agent/checkpoints.py`)와 `SessionService.revert_from_message`(`domains/sessions/service.py`)를 직접 구현해 세 저장소를 함께 되감습니다.
+LangGraph는 파일 롤백 기능을 제공하지 않으므로, Content-Addressed[^8] 파일 스냅샷 엔진인 `TurnCheckpointStore`(`domains/agent/checkpoints.py`)와 `SessionService.revert_from_message`(`domains/sessions/service.py`)를 직접 구현해 세 저장소를 함께 되감습니다.
 
 ```mermaid
 flowchart TB
@@ -526,7 +526,7 @@ flowchart TB
   REV --> L3["3. LLM 기억 재동기화 (DeepAgentHarness - 직접 구현)\nLangGraph 스레드 체크포인트 삭제(adelete_thread) 후\n다음 턴 시작 시 남은 이전 대화(prior_messages)만 재주입"]
 ```
 
-`TurnCheckpointStore`는 파일 원문을 SHA-256 해시 이름의 블롭으로 중복 없이 저장하고, 턴 종료 시 변경된 파일만 매니페스트에 기록합니다. 스캔 비용을 줄이기 위해 `(mtime_ns, ctime_ns, size, ino)`가 동일하고 수정 시각이 스냅샷 시작보다 2초 이상 과거인 파일은 재해싱을 생략하되, 2초 이내 동일 크기 수정(Racy-Git 조건)은 다시 해싱해 누락을 막습니다.
+`TurnCheckpointStore`는 파일 원문을 SHA-256 해시 이름의 블롭으로 중복 없이 저장하고, 턴 종료 시 변경된 파일만 매니페스트에 기록합니다. 스캔 비용을 줄이기 위해 `(mtime_ns, ctime_ns, size, ino)`가 동일하고 수정 시각이 스냅샷 시작보다 2초 이상 과거인 파일은 재해싱을 생략하되, 2초 이내 동일 크기 수정(Racy-Git 조건[^9])은 다시 해싱해 누락을 막습니다.
 
 ---
 
@@ -567,7 +567,7 @@ flowchart LR
 
 컴파일된 LangGraph 객체를 매 요청마다 새로 만들면 오버헤드가 크고, 반대로 인스턴스 하나를 여러 세션이 그냥 공유하면 워크스페이스 경로가 섞입니다.
 
-이를 해결하기 위해 **컴파일된 그래프는 `(모델 설정 해시, 실행 모드)` 키로 LRU 캐시에서 재사용**하고, 실행 시점의 세션 경로·아티팩트 폴더·시크릿은 불변 객체 `RunCatalog`에 담아 Python 표준 `contextvars.ContextVar`(`RunContext`)로 바인딩합니다.
+이를 해결하기 위해 **컴파일된 그래프는 `(모델 설정 해시, 실행 모드)` 키로 LRU 캐시[^10]에서 재사용**하고, 실행 시점의 세션 경로·아티팩트 폴더·시크릿은 불변 객체 `RunCatalog`에 담아 Python 표준 `contextvars.ContextVar`[^5](`RunContext`)로 바인딩합니다.
 
 ```python
 # 컴파일된 graph는 공유하되, 실행 경로와 상태는 비동기 태스크별로 격리됩니다.
@@ -584,11 +584,11 @@ async with RunContext.activate(catalog):
 ### 6-3. 스트림 중단(`Abort`) 복구, 보안, AST 도메인 경계 (직접 구현)
 
 - **스트림 중단 시 스냅샷 회수 (`asyncio.shield`)**
-  - 사용자가 실행 중 `Stop`을 누르거나 화면을 전환해 SSE 연결이 끊기면 `CancelledError` / `GeneratorExit`가 발생합니다.
-  - `SessionService._consume_and_persist_stream`은 `finally` 블록을 `asyncio.shield`로 보호해 하위 스트림을 닫고, 중단 직전까지 수정된 파일 매니페스트(`finalize_pending_capture`)와 누적 메시지를 끝까지 저장합니다. 덕분에 중도 취소된 턴도 정상적으로 `Revert`할 수 있습니다.
+  - 사용자가 실행 중 `Stop`을 누르거나 화면을 전환해 SSE[^11] 연결이 끊기면 `CancelledError` / `GeneratorExit`가 발생합니다.
+  - `SessionService._consume_and_persist_stream`은 `finally` 블록을 `asyncio.shield`[^12]로 보호해 하위 스트림을 닫고, 중단 직전까지 수정된 파일 매니페스트(`finalize_pending_capture`)와 누적 메시지를 끝까지 저장합니다. 덕분에 중도 취소된 턴도 정상적으로 `Revert`할 수 있습니다.
 - **Zero-Persistence 자격증명 보안**
   - LLM URL과 API 키는 브라우저에만 두고 매 요청 `X-LLM-*` 헤더로만 전달받으며, 서버 DB나 체크포인트에는 저장하지 않습니다. 모든 로그는 `SecretRedactionFilter`를 거쳐 키 문자열을 마스킹합니다.
-- **AST 정적 검사로 강제하는 DDD 경계 (`tests/test_architecture_boundaries.py`)**
+- **AST 정적 검사[^13]로 강제하는 DDD 경계[^14] (`tests/test_architecture_boundaries.py`)**
   - 백엔드를 `sessions`, `agent`, `artifacts`, `skills` 도메인과 `shared`로 분리하고 파이썬 `ast` 모듈로 모든 파일의 `import` 구문을 테스트에서 검증합니다. `agent`가 `sessions`를 참조하거나 `artifacts`가 `langgraph`를 참조하면 즉시 테스트가 실패해 도메인 간 역참조를 차단합니다.
 - **프론트엔드 연결 원칙 요약**
   - 프론트엔드는 원본 SSE 이벤트와 메시지 배열을 변형 없이 보존하고, 렌더링 직전 순수 셀렉터 함수로만 연속 탐색 그룹과 서브에이전트 카드를 계산합니다. UI는 커스텀 CSS 없이 `@astryxdesign/core` 컴포넌트 조합만으로 구성했습니다.
@@ -611,8 +611,8 @@ async with RunContext.activate(catalog):
   - 파일 경로 오타나 문자열 불일치는 `ToolMessage`로 돌려줘야 모델이 스스로 고쳐 재시도하지만, LangGraph `interrupt()`나 스트림 취소 예외까지 `except Exception`류로 삼켜버리면 일시 정지와 취소가 망가집니다. 복구 대상 오류와 상태 머신 제어 신호를 분리해 전파하는 것이 안정성의 핵심이었습니다.
 - **에이전트의 Revert는 파일·DB·체크포인터 기억을 함께 되감아야 합니다**
   - 디스크 파일만 이전 상태로 돌리고 체크포인터의 대화 기억을 남겨두면, 모델은 이미 사라진 코드를 전제로 다음 수정을 시도해 꼬이게 됩니다. SHA-256 파일 복원, SQLite 메시지 절삭, LangGraph 스레드 재주입(`prior_messages`)을 한 단위로 묶어야 일관성이 유지됩니다.
-- **도메인 경계는 문서 규칙이 아니라 AST 단위 테스트로 잠가야 유지됩니다**
-  - 기능이 늘어날수록 편의를 위해 도메인 간 직접 `import`를 추가하려는 유혹이 생깁니다. `test_architecture_boundaries.py`로 의존성 위반을 자동 차단하고 파일 수정·복원 불변식 테스트를 함께 돌린 덕분에 반복적인 구조 개편에서도 회귀 없이 아키텍처를 유지할 수 있었습니다.
+- **도메인 경계는 문서 규칙이 아니라 AST 단위 테스트[^13]로 잠가야 유지됩니다**
+  - 기능이 늘어날수록 편의를 위해 도메인 간 직접 `import`를 추가하려는 유혹이 생깁니다. `test_architecture_boundaries.py`로 의존성 위반을 자동 차단하고 파일 수정·복원 불변식 테스트[^15]를 함께 돌린 덕분에 반복적인 구조 개편에서도 회귀 없이 아키텍처를 유지할 수 있었습니다.
 
 ---
 
@@ -626,6 +626,25 @@ async with RunContext.activate(catalog):
   - 현재는 세션이 `RUNNING` 상태일 때 동일 세션으로 추가 메시지 요청이 들어오면 상태 경합과 메시지 뒤섞임을 막기 위해 API 진입부에서 `409 SESSION_RUNNING`으로 즉시 거절합니다.
   - 이 때문에 에이전트가 작업 도중 엉뚱한 디렉터리를 탐색하거나 요구사항을 다르게 해석해 진행하고 있어도, 실행 흐름을 유지한 채 *"그 모듈 말고 `auth/` 쪽부터 확인해 줘"*처럼 중간에 방향만 틀어줄 수 없습니다. 사용자가 일단 `Stop`(`Abort`)으로 현재 스트림을 강제 종료한 뒤 새 턴을 다시 열어야 하므로, 직전까지 쌓인 추론 맥락이 끊기는 아쉬움이 있습니다.
 - **후속 구현 방향 (`In-Flight Message Queue` 주입)**
-  - 세션별 비동기 메시지 큐(`asyncio.Queue`)와 실행 중 개입 전용 엔드포인트(예: `POST /api/sessions/{id}/steer`)를 두어, `RUNNING` 상태에서도 사용자의 추가 지시를 큐에 논블로킹으로 적재하는 구조를 구상하고 있습니다.
+  - 세션별 비동기 메시지 큐(`asyncio.Queue`)와 실행 중 개입 전용 엔드포인트(예: `POST /api/sessions/{id}/steer`)를 두어, `RUNNING` 상태에서도 사용자의 추가 지시를 큐에 논블로킹[^16]으로 적재하는 구조를 구상하고 있습니다.
   - LangGraph 상태 머신에서는 진행 중인 도구 실행을 강제로 끊지 않고 안전하게 마무리한 직후, 다음 모델 추론에 들어가기 전 미들웨어 훅(`abefore_model`)에서 큐를 비워(`drain`) 대기 중인 사용자 지시를 `messages` 배열 끝에 `HumanMessage`로 합류시킵니다.
   - 이렇게 확장하면 파일 스냅샷이나 서브프로세스 무결성을 해치지 않으면서도, 에이전트가 다음 추론 스텝부터 즉시 바뀐 지시사항을 반영해 작업을 이어갈 수 있습니다.
+
+---
+
+[^1]: **RAG (Retrieval-Augmented Generation, 검색 증강 생성)**: 모델이 학습하지 않은 사내 문서나 최신 정보를 답할 수 있도록, 질문과 관련된 자료를 외부 저장소에서 먼저 검색해 프롬프트에 참고 문맥으로 함께 넣어주는 방식입니다.
+[^2]: **Prompt Prefix Caching & KV Cache**: LLM 추론 서버가 직전 요청과 앞부분(Prefix) 토큰열이 동일할 때, 이미 계산해 둔 어텐션 중간 연산값(`KV Cache`)을 메모리에 남겨 두었다가 재사용해 응답 대기 시간과 연산 비용을 크게 줄이는 기법입니다.
+[^3]: **ACI (Agent-Computer Interface)**: 사람이 화면과 마우스로 프로그램을 다루는 UI(HCI)에 대응하는 개념으로, LLM 에이전트가 실수 없이 도구를 호출하고 실행 결과를 정확히 해석할 수 있도록 입출력 인자 구조와 에러 피드백 형식을 설계하는 인터페이스입니다.
+[^4]: **Path Traversal (경로 이탈)**: `../../etc/passwd` 같은 상대 경로나 심볼릭 링크를 조합해 허용된 작업 디렉터리 바깥의 상위 시스템 파일에 접근하거나 수정하려는 행위입니다.
+[^5]: **ContextVar (`contextvars.ContextVar`)**: 단일 서버 프로세스가 여러 비동기 요청을 동시에 처리할 때, 함수 인자로 일일이 넘기지 않고도 각 요청(Task)마다 값이 섞이지 않는 독립된 실행 컨텍스트 저장소를 제공하는 Python 표준 라이브러리 기능입니다.
+[^6]: **Stateless (무상태성)**: 서버가 이전 요청의 대화 상태를 내부에 기억하지 않고 매 HTTP 요청을 독립적인 새 요청으로 처리하는 성질입니다. 대화를 이어가려면 호출할 때마다 누적된 전체 메시지 배열을 다시 전달해야 합니다.
+[^7]: **JSON Schema**: 함수가 어떤 이름의 인자를 받으며 각 인자의 자료형(문자열, 정수 등)과 필수 여부가 무엇인지 기계가 읽고 검증할 수 있도록 표준 JSON 형식으로 정의한 명세입니다.
+[^8]: **Content-Addressed Storage (내용 기반 주소 저장소)**: 파일 이름이 아니라 파일 원문으로부터 계산한 암호화 해시값(`SHA-256`) 자체를 파일 식별자로 삼아 저장하는 방식입니다. 내용이 같으면 동일한 블롭(원본 조각) 하나만 공유하므로 중복 저장이 발생하지 않고, 매니페스트(변경 목록표)에는 경로별 전후 해시값만 기록합니다.
+[^9]: **Racy-Git 조건**: 스냅샷을 찍은 직후 아주 짧은 시간(파일시스템 타임스탬프 해상도 구간) 안에 파일 내용이 우연히 같은 바이트 크기로 바뀔 경우, 수정 시각(`mtime`)과 파일 크기(`size`) 비교만으로는 변경 사실을 놓치게 되는 현상입니다. Git 내부 구현에서 유래한 용어로, 이 구간의 파일은 해시를 다시 계산해 누락을 막습니다.
+[^10]: **LRU (Least Recently Used) 캐시**: 정해진 캐시 용량이 가득 찼을 때 가장 오랫동안 참조되지 않은 항목부터 비워 메모리 사용량을 일정 한도 안으로 유지하는 캐시 교체 방식입니다.
+[^11]: **SSE (Server-Sent Events)**: 하나의 HTTP 연결을 열어 두고 서버에서 클라이언트로 생성 중인 텍스트 조각과 도구 실행 이벤트를 실시간 단방향 스트림으로 전달하는 웹 표준 프로토콜입니다.
+[^12]: **`asyncio.shield`**: 클라이언트 연결 종료 등으로 상위 비동기 작업에 취소 신호(`CancelledError`)가 전달되더라도, 보호 대상인 내부 정리 작업(DB 기록, 파일 스냅샷 마감 등)만큼은 중단되지 않고 끝까지 완료되도록 감싸는 Python 비동기 제어 함수입니다.
+[^13]: **AST (Abstract Syntax Tree, 추상 구문 트리) 및 AST 단위 테스트**: 소스 코드를 실행하지 않고 문법 구조(어떤 모듈을 `import`하는지, 어떤 함수·클래스가 선언되었는지 등)만 트리 형태의 데이터로 파싱한 결과물입니다. **AST 단위 테스트**는 파이썬 내장 `ast` 모듈로 전체 코드의 `import` 구문을 정적으로 전수 검사해, 허용되지 않은 도메인 간 참조가 한 줄이라도 발견되면 즉시 테스트를 실패시키는 아키텍처 검증 기법입니다.
+[^14]: **DDD (Domain-Driven Design, 도메인 주도 설계)**: 소프트웨어를 핵심 역할·책임 단위(도메인)로 분리하고, 각 도메인이 내부 구현을 숨긴 채 명시된 경계와 인터페이스를 통해서만 협력하도록 구조화하는 설계 방식입니다.
+[^15]: **불변식 테스트 (Invariant Test)**: 개별 함수의 단순 입출력 확인을 넘어, 어떤 작업이나 상태 전이가 일어난 뒤에도 시스템 전체가 반드시 지켜야 하는 핵심 조건(예: *"턴 실행 후 Revert를 수행하면 모든 파일 해시와 남는 대화 목록이 턴 시작 전 상태와 정확히 일치해야 한다"*)이 깨지지 않았는지 검증하는 테스트입니다.
+[^16]: **논블로킹 (Non-blocking)**: 먼저 실행 중인 작업이 끝날 때까지 요청자가 멈춰 기다리지 않고, 큐에 요청만 즉시 등록한 뒤 곧바로 제어를 돌려받는 처리 방식입니다.
