@@ -5,7 +5,7 @@
 
 ## 문서 바로가기 (Wiki)
 
-- **[코딩 에이전트 6단계 토폴로지 & 구현 원리 (`docs/coding-agent-study.md`)](docs/coding-agent-study.md)** — 처음 만드는 사람 눈높이에서 풀어낸 런타임 배선도, 도구 호출·컨텍스트·서브에이전트·Revert 원리와 Lessons Learned
+- **[코딩 에이전트 구현 Review (`docs/coding-agent-study.md`)](docs/coding-agent-study.md)** — Runtime Topology, Tool Calling·Context·Subagent·Revert 동작 원리와 프레임워크 대비 직접 구현 내역 및 Lessons Learned
 - **[시스템 아키텍처 (`docs/architecture.md`)](docs/architecture.md)** — 4개 DDD Bounded Context, 하네스·미들웨어 파이프라인, 3계층 Revert 구조 요약
 - **[구현 회고 요약 (`docs/what-i-learned.md`)](docs/what-i-learned.md)** — 코딩 에이전트를 직접 구현하며 얻은 핵심 교훈 요약
 - **[유비쿼터스 용어집 (`GLOSSARY.md`)](GLOSSARY.md)** — 도메인 핵심 개념 정의

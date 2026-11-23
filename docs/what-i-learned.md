@@ -1,8 +1,8 @@
 # 코딩 에이전트 구현 회고 요약 (Lessons Learned)
 
-Anvil을 직접 설계·구현·개선하면서 배운 **코딩 에이전트 엔지니어링의 핵심 교훈**을 빠르게 훑어볼 수 있도록 요약한 문서입니다.
+코딩 에이전트를 직접 설계·구현·개선하면서 얻은 핵심 엔지니어링 교훈을 빠르게 훑어볼 수 있도록 요약한 문서입니다.
 
-> 처음 만드는 사람 눈높이에서 6단계 토폴로지·도구 호출·컨텍스트 관리·서브에이전트·Revert 작동 원리까지 상세히 풀어쓴 본문은 **[코딩 에이전트 6단계 토폴로지 & 구현 원리 (`docs/coding-agent-study.md`)](coding-agent-study.md)**를 참고하세요.
+> Runtime Topology·도구 호출·Context 관리·Subagent·Revert 동작 원리와 직접 구현 범위를 상세히 정리한 본문은 **[코딩 에이전트 구현 Review (`docs/coding-agent-study.md`)](coding-agent-study.md)**를 참고하세요.
 
 ---
 
