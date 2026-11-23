@@ -5,6 +5,7 @@
 
 ## 문서 바로가기 (Wiki)
 
+- **[프로젝트 개요 (`docs/overview.md`)](docs/overview.md)** — 학습 목표, Agent 요약, 개발 일정·로그 및 남은 작업
 - **[코딩 에이전트 구현 Review (`docs/coding-agent-study.md`)](docs/coding-agent-study.md)** — Runtime Topology, Tool Calling · Context · Subagent · Revert 동작 원리와 직접 구현 범위, Lessons Learned 및 후속 과제
 - **[시스템 아키텍처 (`docs/architecture.md`)](docs/architecture.md)** — 디렉터리 구조, DDD 도메인 경계, 미들웨어 파이프라인, 동기화 Revert 레퍼런스
 - **[유비쿼터스 용어집 (`GLOSSARY.md`)](GLOSSARY.md)** — 도메인 핵심 개념 정의

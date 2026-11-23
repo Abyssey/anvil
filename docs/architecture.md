@@ -2,7 +2,7 @@
 
 로컬 파일시스템과 셸 위에서 동작하는 코딩 에이전트의 디렉터리 구조, 도메인 경계, 런타임 파이프라인을 코드 기준으로 요약한 레퍼런스 문서입니다.
 
-> Tool Calling 루프부터 Context 관리·Subagent·Interrupt·Revert까지의 동작 원리와 구현 회고는 **[코딩 에이전트 구현 Review (`docs/coding-agent-study.md`)](coding-agent-study.md)**를 참고하세요.
+> Tool Calling 루프부터 Context 관리·Subagent·Interrupt·Revert까지의 상세 동작 원리는 **[코딩 에이전트 구현 Review (`docs/coding-agent-study.md`)](coding-agent-study.md)**를 참고하세요.
 
 ---
 
