@@ -1,4 +1,4 @@
-"""Antigravity ArtifactWorkflowMiddleware: Plan/Shell HITL interrupts and artifact sync."""
+"""ArtifactWorkflowMiddleware: Plan/Shell HITL interrupts and session artifact sync."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ class ArtifactWorkflowState(AgentState[Any]):
 
 
 class ArtifactWorkflowMiddleware(AgentMiddleware[ArtifactWorkflowState, Any, Any]):
-    """Coordinates Antigravity artifact persistence, plan HITL, and shell HITL interrupts."""
+    """Coordinates session artifact persistence, plan review, and shell approval interrupts."""
 
     state_schema = ArtifactWorkflowState
 

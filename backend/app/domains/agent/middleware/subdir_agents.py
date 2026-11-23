@@ -1,4 +1,4 @@
-"""Auto-inject ancestor AGENTS.md instructions when reading files (Open SWE pattern)."""
+"""Auto-inject ancestor AGENTS.md instructions when reading files."""
 
 from __future__ import annotations
 

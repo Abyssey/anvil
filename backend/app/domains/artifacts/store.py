@@ -30,7 +30,7 @@ _KIND_TO_FILENAME: dict[ArtifactKind, tuple[str, str]] = {
 
 
 class ArtifactStore:
-    """Manages isolated per-session Antigravity artifacts outside the target repository."""
+    """Manages isolated per-session artifacts outside the target repository."""
 
     def __init__(self, artifacts_root: Path) -> None:
         self._root = artifacts_root.resolve()

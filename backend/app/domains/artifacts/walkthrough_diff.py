@@ -1,4 +1,4 @@
-"""Pure-stdlib unified git diff parser and walkthrough hunk planner (Open SWE inspired)."""
+"""Pure-stdlib unified git diff parser and walkthrough hunk planner."""
 
 from __future__ import annotations
 

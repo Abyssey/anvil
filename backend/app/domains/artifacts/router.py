@@ -1,4 +1,4 @@
-"""Thin FastAPI router for reading and exporting Antigravity artifacts."""
+"""Thin FastAPI router for reading and exporting session artifacts."""
 
 from __future__ import annotations
 

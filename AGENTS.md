@@ -38,7 +38,7 @@ Four Bounded Contexts (`sessions`, `agent`, `artifacts`, `skills`) plus `shared`
 7. `backend/app/domains/*/router.py`: Thin HTTP adapters ONLY — ZERO direct `sqlite3`, `aiosqlite`, `deepagents`, `langgraph`, or `subprocess` imports.
 8. ZERO test doubles or mock LLMs anywhere inside `backend/app/` (keep fakes strictly under `tests/fakes/`).
 
-## 3. Coding & Runtime Conventions (`open-swe` + FastAPI 0.165)
+## 3. Coding & Runtime Conventions (FastAPI 0.165 + LangGraph)
 
 - **Async-only I/O** on the backend; pass **both** `http_client=httpx.Client(trust_env=False)` and `http_async_client=httpx.AsyncClient(trust_env=False)` plus `max_retries=0` on `ReasoningChatOpenAI`.
 - **Strong typing**: Avoid `Any`/`any`; use `Protocol`, `Union`, generics, or `object`/`unknown` with narrowing.

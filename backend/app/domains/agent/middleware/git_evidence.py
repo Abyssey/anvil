@@ -1,4 +1,4 @@
-"""Pre-turn and post-mutation Git snapshot tracker (Open SWE GitEvidence pattern)."""
+"""Pre-turn and post-mutation Git snapshot tracker."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Read-only explorer and reviewer subagent specifications (Open SWE pattern)."""
+"""Read-only explorer and reviewer subagent specifications."""
 
 from __future__ import annotations
 

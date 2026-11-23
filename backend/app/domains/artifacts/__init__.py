@@ -1,1 +1,1 @@
-"""Artifacts Bounded Context: Antigravity documents, HITL workflow, and diff walkthroughs."""
+"""Artifacts Bounded Context: session documents and diff walkthrough plans."""

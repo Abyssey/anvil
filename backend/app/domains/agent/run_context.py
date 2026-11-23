@@ -1,4 +1,4 @@
-"""Per-run execution catalog and async ContextVar registry (Open SWE RunContext pattern)."""
+"""Per-run execution catalog and async ContextVar registry."""
 
 from __future__ import annotations
 

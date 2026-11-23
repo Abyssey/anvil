@@ -1,4 +1,4 @@
-"""Pure Pydantic entities for Antigravity artifacts and diff walkthrough chunks."""
+"""Pure Pydantic entities for session artifacts and diff walkthrough chunks."""
 
 from __future__ import annotations
 

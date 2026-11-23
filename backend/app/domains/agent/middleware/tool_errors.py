@@ -1,4 +1,4 @@
-"""Recoverable tool error wrapper that preserves LangGraph interrupts (Open SWE pattern)."""
+"""Recoverable tool error wrapper that preserves LangGraph interrupts."""
 
 from __future__ import annotations
 

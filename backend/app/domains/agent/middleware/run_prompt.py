@@ -1,4 +1,4 @@
-"""Prompt-cache friendly system prompt ordering (Open SWE RunPromptMiddleware)."""
+"""Prompt-cache friendly system prompt ordering (RunPromptMiddleware)."""
 
 from __future__ import annotations
 
