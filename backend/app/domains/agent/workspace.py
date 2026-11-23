@@ -13,7 +13,7 @@ from backend.app.domains.artifacts.walkthrough_diff import parse_unified_diff
 from backend.app.shared.errors import DomainError, InvalidWorkspaceError, PathEscapeError
 
 _IGNORED_NAMES = frozenset(
-    {".git", "node_modules", ".venv", "__pycache__", "dist", ".abyss-data", ".pytest_cache"}
+    {".git", "node_modules", ".venv", "__pycache__", "dist", ".data", ".pytest_cache"}
 )
 _MAX_FILE_PREVIEW_BYTES = 200_000
 

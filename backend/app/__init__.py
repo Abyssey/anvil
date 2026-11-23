@@ -1,1 +1,1 @@
-"""Abyss v2 FastAPI application package."""
+"""FastAPI application package."""

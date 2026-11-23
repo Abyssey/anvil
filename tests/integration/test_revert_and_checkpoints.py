@@ -139,7 +139,7 @@ def test_multi_turn_checkpoint_revert_preserves_prior_turn_and_rehydrates_langgr
         ]
     )
 
-    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=workspace)
+    cfg = AppConfig.for_data_dir(tmp_path / ".data", default_workspace_path=workspace)
     app = create_app(config=cfg, model_factory=_FakeModelFactory(model))
 
     with TestClient(app) as client:
@@ -246,7 +246,7 @@ def test_modifying_governance_check_file_triggers_hitl_and_git_diff_revert_works
         ]
     )
 
-    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=workspace)
+    cfg = AppConfig.for_data_dir(tmp_path / ".data", default_workspace_path=workspace)
     app = create_app(config=cfg, model_factory=_FakeModelFactory(model))
 
     with TestClient(app) as client:

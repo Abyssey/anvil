@@ -97,9 +97,9 @@ def _system_prompt_text(call_messages: list[object]) -> str:
 
 
 def test_app_config_exposes_skills_and_memories_roots(tmp_path: Path) -> None:
-    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=tmp_path)
-    assert cfg.skills_root == (tmp_path / ".abyss-data" / "skills").resolve()
-    assert cfg.memories_root == (tmp_path / ".abyss-data" / "memories").resolve()
+    cfg = AppConfig.for_data_dir(tmp_path / ".data", default_workspace_path=tmp_path)
+    assert cfg.skills_root == (tmp_path / ".data" / "skills").resolve()
+    assert cfg.memories_root == (tmp_path / ".data" / "memories").resolve()
     cfg.ensure_directories()
     assert cfg.skills_root.is_dir()
     assert cfg.memories_root.is_dir()
@@ -117,7 +117,7 @@ def test_project_a_and_project_b_memory_strict_isolation(tmp_path: Path) -> None
             ScriptedTurn(content="Project B answered."),
         ]
     )
-    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=repo_a)
+    cfg = AppConfig.for_data_dir(tmp_path / ".data", default_workspace_path=repo_a)
     app = create_app(config=cfg, model_factory=_FakeModelFactory(model))
 
     with TestClient(app) as client:
@@ -185,7 +185,7 @@ def test_same_project_sessions_reload_updated_memory_every_turn(tmp_path: Path) 
             ScriptedTurn(content="s2 turn 2 after update"),
         ]
     )
-    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=repo)
+    cfg = AppConfig.for_data_dir(tmp_path / ".data", default_workspace_path=repo)
     app = create_app(config=cfg, model_factory=_FakeModelFactory(model))
 
     with TestClient(app) as client:
@@ -269,7 +269,7 @@ def test_ask_mode_blocks_project_memory_write_and_auto_mode_allows_it(tmp_path: 
             ScriptedTurn(content="Auto write succeeded."),
         ]
     )
-    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=repo)
+    cfg = AppConfig.for_data_dir(tmp_path / ".data", default_workspace_path=repo)
     app = create_app(config=cfg, model_factory=_FakeModelFactory(model))
 
     with TestClient(app) as client:
@@ -347,7 +347,7 @@ def test_plan_mode_blocks_memory_write_before_approval_and_allows_after(tmp_path
             ScriptedTurn(content="Memory updated."),
         ]
     )
-    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=repo)
+    cfg = AppConfig.for_data_dir(tmp_path / ".data", default_workspace_path=repo)
     app = create_app(config=cfg, model_factory=_FakeModelFactory(model))
 
     with TestClient(app) as client:
@@ -388,7 +388,7 @@ def test_patch_session_workspace_change_returns_400_immutable(tmp_path: Path) ->
     _init_git_repo(repo_b)
 
     model = ScriptedReasoningChatModel(turns=[ScriptedTurn(content="ok")])
-    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=repo_a)
+    cfg = AppConfig.for_data_dir(tmp_path / ".data", default_workspace_path=repo_a)
     app = create_app(config=cfg, model_factory=_FakeModelFactory(model))
 
     with TestClient(app) as client:
@@ -428,7 +428,7 @@ def test_delete_session_and_delete_project_clean_checkpoints_and_memory_dir(
             ScriptedTurn(content="reply b"),
         ]
     )
-    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=repo_a)
+    cfg = AppConfig.for_data_dir(tmp_path / ".data", default_workspace_path=repo_a)
     app = create_app(config=cfg, model_factory=_FakeModelFactory(model))
 
     def _checkpoint_count(thread_id: str) -> int:
@@ -550,7 +550,7 @@ def test_project_memory_crud_and_32kb_limit(tmp_path: Path) -> None:
     repo = tmp_path / "repo_crud"
     _init_git_repo(repo, agents_md="# Repo Instructions")
     model = ScriptedReasoningChatModel(turns=[ScriptedTurn(content="ok")])
-    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=repo)
+    cfg = AppConfig.for_data_dir(tmp_path / ".data", default_workspace_path=repo)
     app = create_app(config=cfg, model_factory=_FakeModelFactory(model))
 
     with TestClient(app) as client:
@@ -628,7 +628,7 @@ def test_stream_message_forwards_pinned_skills_and_subdir_agents_dedupes_root(
             ScriptedTurn(content="Done reading."),
         ]
     )
-    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=repo)
+    cfg = AppConfig.for_data_dir(tmp_path / ".data", default_workspace_path=repo)
     app = create_app(config=cfg, model_factory=_FakeModelFactory(model))
 
     with TestClient(app) as client:

@@ -9,8 +9,8 @@ import {
 } from "../../../utils/mermaidRenderer";
 import { MermaidDiagram } from "../MermaidDiagram";
 import {
-  ABYSS_MARKDOWN_PLUGINS,
-  ABYSS_STREAMING_MARKDOWN_PLUGINS,
+  MARKDOWN_PLUGINS,
+  STREAMING_MARKDOWN_PLUGINS,
 } from "../markdownPlugins";
 
 afterEach(() => {
@@ -90,7 +90,7 @@ describe("MermaidDiagram and Astryx Markdown integration", () => {
     ].join("\n");
 
     const { container } = renderWithTheme(
-      <Markdown density="compact" plugins={ABYSS_MARKDOWN_PLUGINS}>
+      <Markdown density="compact" plugins={MARKDOWN_PLUGINS}>
         {md}
       </Markdown>,
     );
@@ -151,7 +151,7 @@ describe("MermaidDiagram and Astryx Markdown integration", () => {
         <Markdown
           density="compact"
           isStreaming
-          plugins={ABYSS_STREAMING_MARKDOWN_PLUGINS}
+          plugins={STREAMING_MARKDOWN_PLUGINS}
         >
           {partialMd}
         </Markdown>

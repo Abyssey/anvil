@@ -1,16 +1,16 @@
-// The abyss theme. `astryx experimental theme editor` wrote this file once and never changes it again.
-// The checked settings live in abyss.settings.json and the generated abyss.settings.ts;
-// change them with `astryx experimental theme editor set abyss ...`. Add your own changes below: they win over the settings.
+// The workbench theme. `astryx experimental theme editor` wrote this file once and never changes it again.
+// The checked settings live in workbench.settings.json and the generated workbench.settings.ts;
+// change them with `astryx experimental theme editor set workbench ...`. Add your own changes below: they win over the settings.
 import {defineTheme, defineSyntaxTheme} from '@astryxdesign/core/theme';
-import {abyssSettings} from './abyss.settings';
+import {workbenchSettings} from './workbench.settings';
 
 /**
  * Always-dark GitHub Dark-inspired syntax palette (WCAG AA >= 4.5:1 against #0d1117)
  * so fenced code blocks, tool outputs, file previews, and diffs stand out crisply
  * from light and dark prose surfaces alike.
  */
-const abyssSyntax = defineSyntaxTheme({
-  name: 'abyss-github-dark',
+const workbenchSyntax = defineSyntaxTheme({
+  name: 'workbench-github-dark',
   tokens: {
     keyword: '#ff7b72',
     string: '#a5d6ff',
@@ -34,10 +34,10 @@ const abyssSyntax = defineSyntaxTheme({
   },
 });
 
-export const abyssTheme = defineTheme({
-  extends: abyssSettings,
-  name: 'abyss',
-  syntax: abyssSyntax,
+export const workbenchTheme = defineTheme({
+  extends: workbenchSettings,
+  name: 'workbench',
+  syntax: workbenchSyntax,
   components: {
     'code-block': {
       base: {

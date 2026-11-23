@@ -74,7 +74,7 @@ def _headers(api_key: str = "sk-live-secret-key-007") -> dict[str, str]:
 
 
 def _client(tmp_path: Path, model: ScriptedReasoningChatModel) -> Iterator[TestClient]:
-    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=tmp_path / "repo")
+    cfg = AppConfig.for_data_dir(tmp_path / ".data", default_workspace_path=tmp_path / "repo")
     app = create_app(config=cfg, model_factory=_FakeModelFactory(model))
     with TestClient(app) as client:
         yield client
@@ -84,7 +84,7 @@ def test_missing_llm_credentials_returns_428_and_keys_never_leak(tmp_path: Path)
     workspace = tmp_path / "repo"
     _init_workspace(workspace)
     model = ScriptedReasoningChatModel(turns=[ScriptedTurn(content="ok")])
-    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=workspace)
+    cfg = AppConfig.for_data_dir(tmp_path / ".data", default_workspace_path=workspace)
     app = create_app(config=cfg, model_factory=_FakeModelFactory(model))
 
     with TestClient(app) as client:
@@ -130,7 +130,7 @@ def test_ask_mode_onboarding_stream_and_save_to_workspace(tmp_path: Path) -> Non
             ),
         ]
     )
-    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=workspace)
+    cfg = AppConfig.for_data_dir(tmp_path / ".data", default_workspace_path=workspace)
     app = create_app(config=cfg, model_factory=_FakeModelFactory(model))
 
     with TestClient(app) as client:
@@ -268,7 +268,7 @@ def test_plan_mode_revise_approve_and_shell_hitl_and_sqlite_restart(tmp_path: Pa
             ScriptedTurn(content="All changes implemented and verified."),
         ]
     )
-    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=workspace)
+    cfg = AppConfig.for_data_dir(tmp_path / ".data", default_workspace_path=workspace)
 
     # First app lifecycle: create session, hit plan_review interrupt, revise, then restart server!
     app1 = create_app(config=cfg, model_factory=_FakeModelFactory(model))
@@ -359,7 +359,7 @@ def test_shell_deny_in_plan_mode_skips_execution(tmp_path: Path) -> None:
             ScriptedTurn(content="Understood, skipped shell command."),
         ]
     )
-    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=workspace)
+    cfg = AppConfig.for_data_dir(tmp_path / ".data", default_workspace_path=workspace)
     app = create_app(config=cfg, model_factory=_FakeModelFactory(model))
     with TestClient(app) as client:
         sid = client.post(
@@ -406,7 +406,7 @@ async def test_stream_cancellation_recovers_session_status_and_saves_partial_mes
 
     workspace = tmp_path / "repo"
     _init_workspace(workspace)
-    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=workspace)
+    cfg = AppConfig.for_data_dir(tmp_path / ".data", default_workspace_path=workspace)
     cfg.ensure_directories()
 
     repo = SQLiteSessionRepository(cfg.sqlite_path)
@@ -490,7 +490,7 @@ def test_plan_deny_cancels_cleanly_and_delete_session_removes_artifacts(
             ScriptedTurn(content="Plan ready."),
         ]
     )
-    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=workspace)
+    cfg = AppConfig.for_data_dir(tmp_path / ".data", default_workspace_path=workspace)
     app = create_app(config=cfg, model_factory=_FakeModelFactory(model))
     with TestClient(app) as client:
         sid = client.post(
@@ -537,7 +537,7 @@ def test_projects_crud_browse_legacy_migration_and_cascade_cleanup(tmp_path: Pat
     _init_workspace(repo_a)
     _init_workspace(repo_b)
 
-    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=repo_a)
+    cfg = AppConfig.for_data_dir(tmp_path / ".data", default_workspace_path=repo_a)
     cfg.ensure_directories()
 
     # Seed legacy SQLite database without `projects` table or `sessions.project_id`
@@ -631,7 +631,7 @@ def test_message_history_cursor_pagination_preserves_order_and_has_more(tmp_path
 
     workspace = tmp_path / "repo"
     _init_workspace(workspace)
-    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=workspace)
+    cfg = AppConfig.for_data_dir(tmp_path / ".data", default_workspace_path=workspace)
     model = ScriptedReasoningChatModel(turns=[ScriptedTurn(content="ok")])
     app = create_app(config=cfg, model_factory=_FakeModelFactory(model))
 

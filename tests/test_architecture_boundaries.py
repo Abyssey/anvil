@@ -1,4 +1,4 @@
-"""AST boundary tests enforcing Abyss v2 DDD Bounded Context invariants."""
+"""AST boundary tests enforcing DDD Bounded Context invariants."""
 
 from __future__ import annotations
 

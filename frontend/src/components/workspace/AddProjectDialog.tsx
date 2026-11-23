@@ -6,7 +6,7 @@ import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
 import { Icon } from "@astryxdesign/core/Icon";
 import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
 import { List, ListItem } from "@astryxdesign/core/List";
-import { HStack, VStack } from "@astryxdesign/core/Stack";
+import { HStack, StackItem, VStack } from "@astryxdesign/core/Stack";
 import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { ArrowUpIcon, FolderIcon } from "@heroicons/react/24/outline";
@@ -100,7 +100,7 @@ export function AddProjectDialog() {
         if (!open) actions.closeAddProject();
       }}
       purpose="form"
-      width={540}
+      width={600}
     >
       <Layout
         height="auto"
@@ -116,22 +116,27 @@ export function AddProjectDialog() {
         content={
           <LayoutContent padding={4}>
             <VStack gap={3}>
-              <HStack gap={2} vAlign="end">
-                <TextInput
-                  label="Folder path"
-                  value={pathInput}
-                  onChange={setPathInput}
-                  onEnter={handleOpenPath}
-                  placeholder="/path/to/repository"
-                  hasAutoFocus
-                />
-                <Button
-                  label="Open"
-                  variant="secondary"
-                  size="md"
-                  isLoading={isLoading}
-                  onClick={handleOpenPath}
-                />
+              <HStack gap={2} vAlign="end" width="100%">
+                <StackItem size="fill">
+                  <TextInput
+                    label="Folder path"
+                    width="100%"
+                    value={pathInput}
+                    onChange={setPathInput}
+                    onEnter={handleOpenPath}
+                    placeholder="/path/to/repository"
+                    hasAutoFocus
+                  />
+                </StackItem>
+                <StackItem size="static">
+                  <Button
+                    label="Open"
+                    variant="secondary"
+                    size="md"
+                    isLoading={isLoading}
+                    onClick={handleOpenPath}
+                  />
+                </StackItem>
               </HStack>
 
               {browseData && (

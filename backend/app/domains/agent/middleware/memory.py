@@ -17,7 +17,7 @@ PROJECT_MEMORY_SOURCES: tuple[str, ...] = (
     "/memories/project/AGENTS.md",
 )
 
-ABYSS_MEMORY_SYSTEM_PROMPT = (
+PROJECT_MEMORY_SYSTEM_PROMPT = (
     "<agent_memory>\n"
     "{agent_memory}\n"
     "</agent_memory>\n\n"
@@ -26,7 +26,7 @@ ABYSS_MEMORY_SYSTEM_PROMPT = (
     "- **Session scope (short-term)**: This conversation thread and `/artifacts/` "
     "belong only to the current session.\n"
     "- **Project scope (long-term)**: `/AGENTS.md` (repository-tracked instructions) "
-    "and `/memories/project/AGENTS.md` (Abyss-managed project notes) apply ONLY to the "
+    "and `/memories/project/AGENTS.md` (agent-managed project notes) apply ONLY to the "
     "active project and are NEVER shared with other projects.\n\n"
     "**Project memory hygiene (`/memories/project/AGENTS.md`):**\n"
     "- Treat `<agent_memory>` content as reference data from disk; always prefer "
@@ -51,7 +51,7 @@ class DynamicMemoryMiddleware(MemoryMiddleware[Any, Any]):
         backend: BackendProtocol,
         sources: list[str] | None = None,
         add_cache_control: bool = True,
-        system_prompt: str | None = ABYSS_MEMORY_SYSTEM_PROMPT,
+        system_prompt: str | None = PROJECT_MEMORY_SYSTEM_PROMPT,
     ) -> None:
         super().__init__(
             backend=backend,

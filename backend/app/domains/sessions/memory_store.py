@@ -1,4 +1,4 @@
-"""Project-scoped long-term memory file store (.abyss-data/memories/projects/{project_id}/)."""
+"""Project-scoped long-term memory file store (.data/memories/projects/{project_id}/)."""
 
 from __future__ import annotations
 

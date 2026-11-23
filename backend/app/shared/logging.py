@@ -13,10 +13,10 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime
 
-_REQUEST_ID: ContextVar[str | None] = ContextVar("abyss_request_id", default=None)
-_SESSION_ID: ContextVar[str | None] = ContextVar("abyss_session_id", default=None)
-_RUN_MODE: ContextVar[str | None] = ContextVar("abyss_run_mode", default=None)
-_ACTIVE_SECRETS: ContextVar[tuple[str, ...]] = ContextVar("abyss_active_secrets", default=())
+_REQUEST_ID: ContextVar[str | None] = ContextVar("request_id", default=None)
+_SESSION_ID: ContextVar[str | None] = ContextVar("session_id", default=None)
+_RUN_MODE: ContextVar[str | None] = ContextVar("run_mode", default=None)
+_ACTIVE_SECRETS: ContextVar[tuple[str, ...]] = ContextVar("active_secrets", default=())
 
 _MIN_SECRET_LEN = 6
 _REDACTED = "[REDACTED]"
@@ -285,13 +285,13 @@ class ConsoleFormatter(logging.Formatter):
 
 
 def _resolve_log_level(raw_level: str | None) -> int:
-    name = (raw_level or os.environ.get("ABYSS_LOG_LEVEL") or "INFO").strip().upper()
+    name = (raw_level or os.environ.get("LOG_LEVEL") or "INFO").strip().upper()
     resolved = getattr(logging, name, None)
     return resolved if isinstance(resolved, int) else logging.INFO
 
 
 def _resolve_log_format(raw_format: str | None) -> str:
-    fmt = (raw_format or os.environ.get("ABYSS_LOG_FORMAT") or "console").strip().lower()
+    fmt = (raw_format or os.environ.get("LOG_FORMAT") or "console").strip().lower()
     return "json" if fmt == "json" else "console"
 
 
@@ -301,7 +301,7 @@ def configure_logging(
     log_format: str | None = None,
     force: bool = False,
 ) -> logging.Handler | None:
-    """Configure idempotent, secret-safe structured logging for Abyss v2."""
+    """Configure idempotent, secret-safe structured logging."""
     global _CONFIGURED
     if _CONFIGURED and not force:
         return None
@@ -311,11 +311,11 @@ def configure_logging(
 
     root = logging.getLogger()
     for existing in list(root.handlers):
-        if getattr(existing, "_abyss_handler", False):
+        if getattr(existing, "_structured_log_handler", False):
             root.removeHandler(existing)
 
     handler = logging.StreamHandler(sys.stderr)
-    handler._abyss_handler = True  # type: ignore[attr-defined]
+    handler._structured_log_handler = True  # type: ignore[attr-defined]
     handler.setLevel(target_level)
     handler.addFilter(SecretRedactionFilter())
     handler.setFormatter(JsonFormatter() if fmt_name == "json" else ConsoleFormatter())

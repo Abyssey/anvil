@@ -84,10 +84,11 @@ export function SettingsDialog() {
         }
         content={
           <LayoutContent padding={4}>
-            <VStack gap={4}>
+            <VStack gap={4} width="100%">
               <TextInput
                 label="Endpoint URL"
                 type="url"
+                width="100%"
                 value={draft.baseUrl}
                 onChange={(val) => setDraft((prev) => ({ ...prev, baseUrl: val }))}
                 placeholder="http://localhost:8001/v1"
@@ -97,6 +98,7 @@ export function SettingsDialog() {
               />
               <TextInput
                 label="Model ID"
+                width="100%"
                 value={draft.model}
                 onChange={(val) => setDraft((prev) => ({ ...prev, model: val }))}
                 placeholder="qwen3.8-flash"
@@ -105,6 +107,7 @@ export function SettingsDialog() {
               <TextInput
                 label="API Key"
                 type="password"
+                width="100%"
                 value={draft.apiKey}
                 onChange={(val) => setDraft((prev) => ({ ...prev, apiKey: val }))}
                 placeholder="sk-..."

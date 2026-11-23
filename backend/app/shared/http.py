@@ -95,7 +95,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(Exception)
     async def _handle_unhandled_error(request: Request, exc: Exception) -> JSONResponse:
         state_req_id = getattr(request.state, "request_id", None)
-        state_secrets = getattr(request.state, "_abyss_active_secrets", ())
+        state_secrets = getattr(request.state, "_active_secrets", ())
         req_id = (
             get_request_id()
             or (state_req_id if isinstance(state_req_id, str) else None)
@@ -165,7 +165,7 @@ class RequestLoggingMiddleware:
         state = scope.setdefault("state", {})
         if isinstance(state, dict):
             state["request_id"] = request_id
-            state["_abyss_active_secrets"] = active_secrets
+            state["_active_secrets"] = active_secrets
         method = str(scope.get("method") or "GET")
         path = str(scope.get("path") or "/")
         status_code = 500

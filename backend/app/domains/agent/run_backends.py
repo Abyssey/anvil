@@ -151,7 +151,7 @@ class _DynamicSandboxPlaceholder(SandboxBackendProtocol):
     @property
     def id(self) -> str:
         catalog = RunContext.current_or_none()
-        return f"abyss-local-shell:{catalog.session_id if catalog else 'unbound'}"
+        return f"local-shell:{catalog.session_id if catalog else 'unbound'}"
 
     def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
         raise NotImplementedError("Execute via DynamicGuardedShellBackend")
@@ -375,7 +375,7 @@ class DynamicGuardedShellBackend(DynamicRunBackend, SandboxBackendProtocol):
     @property
     def id(self) -> str:
         catalog = RunContext.current_or_none()
-        return f"abyss-local-shell:{catalog.session_id if catalog else 'unbound'}"
+        return f"local-shell:{catalog.session_id if catalog else 'unbound'}"
 
     def _default_backend(self, catalog: RunCatalog) -> BackendProtocol:
         return LocalShellBackend(

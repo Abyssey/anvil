@@ -20,6 +20,7 @@ import { HStack, VStack } from "@astryxdesign/core/Stack";
 import { Text } from "@astryxdesign/core/Text";
 import { ArrowUturnLeftIcon } from "@heroicons/react/24/outline";
 import type { ChatMessage as ChatMessageEntity } from "../../api/types";
+import { APP_NAME } from "../../constants";
 import { useWorkspace } from "../../state/workspaceContext";
 import {
   computeAssistantTurnDurationMs,
@@ -29,8 +30,8 @@ import {
   type GroupedToolBlock,
 } from "../../utils/toolCallGroups";
 import {
-  ABYSS_MARKDOWN_PLUGINS,
-  ABYSS_STREAMING_MARKDOWN_PLUGINS,
+  MARKDOWN_PLUGINS,
+  STREAMING_MARKDOWN_PLUGINS,
 } from "../markdown/markdownPlugins";
 import { Composer } from "./Composer";
 import { ExplorationGroupView, toChatToolCallItem } from "./ExplorationGroupView";
@@ -336,7 +337,7 @@ export function MessageStream() {
 
   const emptyState = (
     <VStack gap={4} hAlign="center" padding={6}>
-      <Heading level={2}>Abyss Coding Agent</Heading>
+      <Heading level={2}>{`${APP_NAME} Coding Agent`}</Heading>
       <Text color="secondary">
         Inspect any repository in seconds with Ask mode, or switch to Plan to review edits before execution.
       </Text>
@@ -420,7 +421,7 @@ export function MessageStream() {
                 <ChatMessage
                   key={msg.id}
                   sender="assistant"
-                  avatar={<Avatar name="Abyss" size="sm" />}
+                  avatar={<Avatar name={APP_NAME} size="sm" />}
                   metadata={
                     durationMs !== null || verificationBadge !== null || canRevertTurn ? (
                       <HStack gap={2} vAlign="center" wrap="wrap">
@@ -454,7 +455,7 @@ export function MessageStream() {
                     }
                   >
                     <ChatMessageBubble variant="ghost">
-                      <Markdown density="compact" plugins={ABYSS_MARKDOWN_PLUGINS}>
+                      <Markdown density="compact" plugins={MARKDOWN_PLUGINS}>
                         {msg.thinking}
                       </Markdown>
                     </ChatMessageBubble>
@@ -463,7 +464,7 @@ export function MessageStream() {
                 {renderGroupedToolBlocks(toolBlocks, groupOpenOverrides, handleToggleGroup)}
                 {msg.content && (
                   <ChatMessageBubble variant="ghost" width="100%">
-                    <Markdown density="compact" plugins={ABYSS_MARKDOWN_PLUGINS}>
+                    <Markdown density="compact" plugins={MARKDOWN_PLUGINS}>
                       {msg.content}
                     </Markdown>
                   </ChatMessageBubble>
@@ -475,7 +476,7 @@ export function MessageStream() {
           {state.streamingAssistant && (
             <ChatMessage
               sender="assistant"
-              avatar={<Avatar name="Abyss" size="sm" />}
+              avatar={<Avatar name={APP_NAME} size="sm" />}
               metadata={
                 liveWorkingLabel ? (
                   <Text type="supporting" color="secondary" hasTabularNumbers>
@@ -497,7 +498,7 @@ export function MessageStream() {
                     <Markdown
                       density="compact"
                       isStreaming
-                      plugins={ABYSS_STREAMING_MARKDOWN_PLUGINS}
+                      plugins={STREAMING_MARKDOWN_PLUGINS}
                     >
                       {state.streamingAssistant.thinking}
                     </Markdown>
@@ -510,7 +511,7 @@ export function MessageStream() {
                   <Markdown
                     density="compact"
                     isStreaming
-                    plugins={ABYSS_STREAMING_MARKDOWN_PLUGINS}
+                    plugins={STREAMING_MARKDOWN_PLUGINS}
                   >
                     {state.streamingAssistant.content}
                   </Markdown>

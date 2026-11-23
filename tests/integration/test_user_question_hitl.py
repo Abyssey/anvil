@@ -121,7 +121,7 @@ def test_plan_mode_ask_user_interrupt_answer_persists_qa_and_drafts_plan(tmp_pat
         ]
     )
 
-    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=workspace)
+    cfg = AppConfig.for_data_dir(tmp_path / ".data", default_workspace_path=workspace)
     app = create_app(config=cfg, model_factory=_FakeModelFactory(model))
 
     with TestClient(app) as client:
@@ -236,7 +236,7 @@ def test_ask_user_skip_persists_summary_and_continues(tmp_path: Path) -> None:
         ]
     )
 
-    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=workspace)
+    cfg = AppConfig.for_data_dir(tmp_path / ".data", default_workspace_path=workspace)
     app = create_app(config=cfg, model_factory=_FakeModelFactory(model))
 
     with TestClient(app) as client:

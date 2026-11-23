@@ -9,9 +9,10 @@ from langchain.agents.middleware.types import ModelRequest, ModelResponse
 from langchain_core.messages import SystemMessage
 
 from backend.app.domains.agent.run_context import RunContext
+from backend.app.shared.config import APP_NAME
 
 _BASE_AGENT_GUIDANCE = (
-    "You are Abyss, a concise, evidence-driven coding agent.\n"
+    f"You are {APP_NAME}, a concise, evidence-driven coding agent.\n"
     "- Inspect relevant files before making claims; cite exact file paths and symbol names.\n"
     "- Keep explanations direct and free of filler.\n"
     "- Interactive clarification (`ask_user` tool): Whenever you need to ask the user a "

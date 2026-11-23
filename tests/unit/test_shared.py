@@ -26,12 +26,12 @@ from tests.fakes.fake_chat_model import ScriptedReasoningChatModel, ScriptedTurn
 
 
 def test_app_config_creates_data_directories(tmp_path: Path) -> None:
-    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=tmp_path)
+    cfg = AppConfig.for_data_dir(tmp_path / ".data", default_workspace_path=tmp_path)
     assert not cfg.data_dir.exists()
     cfg.ensure_directories()
     assert cfg.data_dir.is_dir()
     assert cfg.artifacts_root.is_dir()
-    assert cfg.sqlite_path == tmp_path / ".abyss-data" / "abyss.db"
+    assert cfg.sqlite_path == tmp_path / ".data" / "sessions.db"
     assert cfg.bundled_skills_dir.parts[-4:] == ("domains", "skills", "builtin") or (
         cfg.bundled_skills_dir.parts[-3:] == ("domains", "skills", "builtin")
     )
@@ -46,7 +46,7 @@ def test_create_app_defers_directory_creation_to_lifespan_and_fastapi_cli_works(
 
     from backend.app.main import create_app
 
-    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=tmp_path)
+    cfg = AppConfig.for_data_dir(tmp_path / ".data", default_workspace_path=tmp_path)
     app = create_app(config=cfg)
     assert not cfg.data_dir.exists()
 

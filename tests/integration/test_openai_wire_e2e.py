@@ -121,7 +121,7 @@ def test_real_openai_wire_sse_onboarding_and_plan_hitl(tmp_path: Path) -> None:
             "X-LLM-Api-Key": "sk-wire-secret-token-777",
             "X-LLM-Enable-Thinking": "true",
         }
-        cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=workspace)
+        cfg = AppConfig.for_data_dir(tmp_path / ".data", default_workspace_path=workspace)
         # Unmodified create_app() using production ModelFactory + ReasoningChatOpenAI!
         app = create_app(config=cfg)
 

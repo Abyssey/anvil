@@ -255,7 +255,7 @@ describe("groupToolCalls", () => {
         makeTool("tc-1", "ls", { path: "/" }, "success"),
         makeTool("tc-2", "read_file", { file_path: "/README.md" }, "success"),
         makeTool("tc-3", "edit_file", { file_path: "/README.md" }, "success"),
-        makeTool("tc-4", "grep", { pattern: "Abyss" }, "running"),
+        makeTool("tc-4", "grep", { pattern: "SessionService" }, "running"),
       ],
       {
         isStreaming: true,

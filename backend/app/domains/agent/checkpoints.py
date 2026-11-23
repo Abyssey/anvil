@@ -23,7 +23,7 @@ _IGNORED_NAMES: frozenset[str] = frozenset(
         ".venv",
         "__pycache__",
         "dist",
-        ".abyss-data",
+        ".data",
         ".pytest_cache",
         ".mypy_cache",
         ".ruff_cache",

@@ -246,7 +246,7 @@ def create_mock_openai_app(state: MockOpenAIState | None = None) -> Starlette:
             {
                 "object": "list",
                 "data": [
-                    {"id": "qwen3.8-flash", "object": "model", "owned_by": "abyss-mock"},
+                    {"id": "qwen3.8-flash", "object": "model", "owned_by": "local-mock"},
                 ],
             }
         )

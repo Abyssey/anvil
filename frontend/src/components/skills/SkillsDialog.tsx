@@ -9,9 +9,10 @@ import { Divider } from "@astryxdesign/core/Divider";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Heading } from "@astryxdesign/core/Heading";
 import { Icon } from "@astryxdesign/core/Icon";
+import { IconButton } from "@astryxdesign/core/IconButton";
 import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
 import { SegmentedControl, SegmentedControlItem } from "@astryxdesign/core/SegmentedControl";
-import { HStack, VStack } from "@astryxdesign/core/Stack";
+import { HStack, StackItem, VStack } from "@astryxdesign/core/Stack";
 import { Tab, TabList } from "@astryxdesign/core/TabList";
 import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
@@ -470,6 +471,7 @@ export function SkillsDialog() {
                       type="search"
                       label="Search skills.sh"
                       isLabelHidden
+                      width="100%"
                       value={searchQuery}
                       onChange={setSearchQuery}
                       onEnter={() => void runSearch(searchQuery)}
@@ -480,24 +482,28 @@ export function SkillsDialog() {
                   </VStack>
 
                   <HStack gap={2} vAlign="end" width="100%">
-                    <VStack width="100%">
+                    <StackItem size="fill">
                       <TextInput
                         label="Direct GitHub install"
+                        width="100%"
                         value={directSource}
                         onChange={setDirectSource}
                         onEnter={() => void handleDirectInstall()}
                         placeholder="owner/repo or owner/repo@skill-id"
                       />
-                    </VStack>
-                    <Button
-                      label="Install"
-                      variant="secondary"
-                      size="md"
-                      icon={<Icon icon={ArrowDownTrayIcon} size="sm" />}
-                      isLoading={installingKey === "direct-install"}
-                      isDisabled={!directSource.trim()}
-                      onClick={() => void handleDirectInstall()}
-                    />
+                    </StackItem>
+                    <StackItem size="static">
+                      <IconButton
+                        label="Install"
+                        tooltip="Install from GitHub"
+                        variant="secondary"
+                        size="md"
+                        icon={<Icon icon={ArrowDownTrayIcon} size="sm" />}
+                        isLoading={installingKey === "direct-install"}
+                        isDisabled={!directSource.trim()}
+                        onClick={() => void handleDirectInstall()}
+                      />
+                    </StackItem>
                   </HStack>
 
                   <VStack gap={2} height={240} isScrollable>
@@ -550,8 +556,9 @@ export function SkillsDialog() {
                                 {installedInScope ? (
                                   <Badge label="Installed" variant="success" />
                                 ) : (
-                                  <Button
+                                  <IconButton
                                     label="Install"
+                                    tooltip={`Install ${skill.name}`}
                                     variant="primary"
                                     size="sm"
                                     icon={<Icon icon={ArrowDownTrayIcon} size="sm" />}

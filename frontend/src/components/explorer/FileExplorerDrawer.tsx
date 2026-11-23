@@ -180,6 +180,7 @@ export function FileExplorerDrawer() {
       <TextInput
         label="Filter files"
         isLabelHidden
+        width="100%"
         value={filterQuery}
         onChange={setFilterQuery}
         placeholder="Filter files..."

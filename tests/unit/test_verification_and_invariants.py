@@ -364,7 +364,7 @@ async def test_legacy_sqlite_transcript_migration_and_diff_parser_invariants(
     assert loaded[1].verification_stamp is None
 
     # Verify built-in progressive-disclosure `verify` skill is discoverable and protected
-    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=tmp_path)
+    cfg = AppConfig.for_data_dir(tmp_path / ".data", default_workspace_path=tmp_path)
     skill_store = SkillStore(
         bundled_dir=cfg.bundled_skills_dir,
         global_dir=cfg.skills_root,

@@ -35,7 +35,7 @@ class RunCatalog:
     verification_tracker: VerificationTracker | None = field(default=None, compare=False)
 
 
-_CURRENT_RUN: ContextVar[RunCatalog | None] = ContextVar("abyss_current_run", default=None)
+_CURRENT_RUN: ContextVar[RunCatalog | None] = ContextVar("current_run", default=None)
 
 
 class RunContext:

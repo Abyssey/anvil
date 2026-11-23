@@ -86,7 +86,7 @@ def test_redact_text_scrubs_active_secrets_headers_and_token_prefixes() -> None:
 
 def test_secret_redaction_filter_scrubs_messages_tracebacks_and_extra_dicts() -> None:
     sentinel = "my-custom-provider-key-424242"
-    test_logger = logging.getLogger("test.abyss.redaction.json")
+    test_logger = logging.getLogger("test.structured.redaction.json")
     test_logger.setLevel(logging.DEBUG)
     test_logger.propagate = False
     handler, stream = _attach_capture_handler(test_logger, fmt="json")
@@ -126,7 +126,7 @@ def test_secret_redaction_filter_scrubs_messages_tracebacks_and_extra_dicts() ->
 
     parsed = json.loads(output.strip())
     assert parsed["level"] == "ERROR"
-    assert parsed["logger"] == "test.abyss.redaction.json"
+    assert parsed["logger"] == "test.structured.redaction.json"
     assert parsed["request_id"] == "req-abc"
     assert parsed["session_id"] == "sess-xyz"
     assert parsed["mode"] == "auto"
@@ -140,7 +140,7 @@ def test_secret_redaction_filter_scrubs_messages_tracebacks_and_extra_dicts() ->
 
 def test_console_formatter_includes_correlation_fields_and_redacts_secrets() -> None:
     sentinel = "console-secret-token-7788"
-    test_logger = logging.getLogger("test.abyss.redaction.console")
+    test_logger = logging.getLogger("test.structured.redaction.console")
     test_logger.setLevel(logging.DEBUG)
     test_logger.propagate = False
     handler, stream = _attach_capture_handler(test_logger, fmt="console")
@@ -163,7 +163,7 @@ def test_console_formatter_includes_correlation_fields_and_redacts_secrets() -> 
     line = stream.getvalue().strip()
     assert sentinel not in line
     assert "INFO" in line
-    assert "[test.abyss.redaction.console]" in line
+    assert "[test.structured.redaction.console]" in line
     assert "request_id=req-con" in line
     assert "session_id=sess-con" in line
     assert "mode=ask" in line
@@ -175,14 +175,18 @@ def test_configure_logging_is_idempotent_and_clamps_third_party_loggers() -> Non
     root = logging.getLogger()
     h1 = configure_logging(level="INFO", log_format="json", force=True)
     assert h1 is not None
-    abyss_handlers_after_first = [h for h in root.handlers if getattr(h, "_abyss_handler", False)]
-    assert len(abyss_handlers_after_first) == 1
+    handlers_after_first = [
+        h for h in root.handlers if getattr(h, "_structured_log_handler", False)
+    ]
+    assert len(handlers_after_first) == 1
 
     # Second call without force is a no-op and does not duplicate handlers
     h2 = configure_logging(level="DEBUG", log_format="console")
     assert h2 is None
-    abyss_handlers_after_second = [h for h in root.handlers if getattr(h, "_abyss_handler", False)]
-    assert len(abyss_handlers_after_second) == 1
+    handlers_after_second = [
+        h for h in root.handlers if getattr(h, "_structured_log_handler", False)
+    ]
+    assert len(handlers_after_second) == 1
 
     for noisy in ("httpx", "httpcore", "openai", "aiosqlite", "watchfiles"):
         assert logging.getLogger(noisy).level == logging.WARNING

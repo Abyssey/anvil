@@ -108,7 +108,7 @@ def test_parse_skill_frontmatter_and_size_limit() -> None:
         "license: MIT\n"
         "compatibility: Python 3.12+\n"
         "metadata:\n"
-        "  author: abyss\n"
+        "  author: acme\n"
         "---\n\n"
         "# Body\n\nDetails here.\n"
     )
@@ -117,7 +117,7 @@ def test_parse_skill_frontmatter_and_size_limit() -> None:
     assert parsed.description == "Runs tests cleanly."
     assert parsed.license == "MIT"
     assert parsed.compatibility == "Python 3.12+"
-    assert parsed.metadata == {"author": "abyss"}
+    assert parsed.metadata == {"author": "acme"}
     assert "# Body" in parsed.body
 
     with pytest.raises(ValueError):
@@ -644,7 +644,7 @@ def test_create_app_mounts_skills_router_and_builtin_skills(tmp_path: Path) -> N
     from backend.app.main import create_app
     from backend.app.shared.config import AppConfig
 
-    cfg = AppConfig.for_data_dir(tmp_path / ".abyss-data", default_workspace_path=tmp_path)
+    cfg = AppConfig.for_data_dir(tmp_path / ".data", default_workspace_path=tmp_path)
     app = create_app(config=cfg)
     with TestClient(app) as client:
         resp = client.get("/api/skills/installed")

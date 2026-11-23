@@ -12,7 +12,7 @@ import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import type { ArtifactKind } from "../../api/types";
 import { useWorkspace } from "../../state/workspaceContext";
-import { ABYSS_MARKDOWN_PLUGINS } from "../markdown/markdownPlugins";
+import { MARKDOWN_PLUGINS } from "../markdown/markdownPlugins";
 
 export function ArtifactDrawer() {
   const { state, actions } = useWorkspace();
@@ -65,6 +65,7 @@ export function ArtifactDrawer() {
             <TextInput
               label="Revision feedback"
               isLabelHidden
+              width="100%"
               value={feedback}
               onChange={setFeedback}
               placeholder="Optional feedback to revise the plan..."
@@ -103,7 +104,7 @@ export function ArtifactDrawer() {
       <Section variant="transparent" padding={2}>
         {activeDoc ? (
           <VStack gap={4}>
-            <Markdown density="compact" plugins={ABYSS_MARKDOWN_PLUGINS}>
+            <Markdown density="compact" plugins={MARKDOWN_PLUGINS}>
               {activeDoc.content}
             </Markdown>
 
@@ -142,6 +143,7 @@ export function ArtifactDrawer() {
               <VStack gap={2} paddingBlockStart={2}>
                 <TextInput
                   label="Target workspace path"
+                  width="100%"
                   value={saveRelPath}
                   onChange={setSaveRelPath}
                   placeholder="docs/ONBOARDING.md"

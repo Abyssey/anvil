@@ -5,7 +5,7 @@ export interface LLMSettings {
   enableThinking: boolean;
 }
 
-export const SETTINGS_STORAGE_KEY = "abyss.llm.settings.v1";
+export const SETTINGS_STORAGE_KEY = "llm.settings.v1";
 
 export const DEFAULT_LLM_SETTINGS: LLMSettings = {
   baseUrl: "",

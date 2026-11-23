@@ -22,7 +22,7 @@ from backend.app.domains.sessions.service import SessionService
 from backend.app.domains.skills.registry_client import SkillsShClient
 from backend.app.domains.skills.router import router as skills_router
 from backend.app.domains.skills.store import SkillStore
-from backend.app.shared.config import AppConfig
+from backend.app.shared.config import APP_NAME, AppConfig
 from backend.app.shared.dependencies import AppContainer
 from backend.app.shared.http import RequestLoggingMiddleware, register_exception_handlers
 from backend.app.shared.logging import configure_logging
@@ -36,7 +36,7 @@ def create_app(
     config: AppConfig | None = None,
     model_factory: ModelFactory | None = None,
 ) -> FastAPI:
-    """Construct the Abyss v2 FastAPI application with async SQLite persistence."""
+    """Construct the FastAPI application with async SQLite persistence."""
     app_config = config or AppConfig.from_repo_root()
     frontend_mounted = app_config.frontend_dist_dir.is_dir()
 
@@ -99,7 +99,7 @@ def create_app(
                 logger.info("app.shutdown", extra={"event": "app.shutdown"})
 
     fastapi_app = FastAPI(
-        title="Abyss v2 Coding Agent",
+        title=f"{APP_NAME} Coding Agent",
         version=APP_VERSION,
         lifespan=lifespan,
     )

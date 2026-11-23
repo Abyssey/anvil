@@ -6,21 +6,21 @@ import {
 import { MermaidDiagram } from "./MermaidDiagram";
 
 type MermaidFenceNode = MarkdownExtensionNode<
-  "abyss-mermaid",
+  "mermaid-fence",
   "mermaid",
   { readonly code: string; readonly label?: string },
   "block"
 >;
 
-function createAbyssMermaidPlugin(isFinal: boolean) {
-  return createMarkdownPlugin<"abyss-mermaid", MermaidFenceNode>({
-    name: "abyss-mermaid",
+function createMermaidPlugin(isFinal: boolean) {
+  return createMarkdownPlugin<"mermaid-fence", MermaidFenceNode>({
+    name: "mermaid-fence",
     apiVersion: 1,
     transform: createMarkdownFenceTransform({
       languages: ["mermaid", "Mermaid"],
       createNode: ({ code, meta }) => ({
         type: "extension",
-        plugin: "abyss-mermaid",
+        plugin: "mermaid-fence",
         name: "mermaid",
         display: "block",
         data: {
@@ -44,8 +44,8 @@ function createAbyssMermaidPlugin(isFinal: boolean) {
   });
 }
 
-export const ABYSS_MARKDOWN_PLUGINS = [createAbyssMermaidPlugin(true)] as const;
+export const MARKDOWN_PLUGINS = [createMermaidPlugin(true)] as const;
 
-export const ABYSS_STREAMING_MARKDOWN_PLUGINS = [
-  createAbyssMermaidPlugin(false),
+export const STREAMING_MARKDOWN_PLUGINS = [
+  createMermaidPlugin(false),
 ] as const;

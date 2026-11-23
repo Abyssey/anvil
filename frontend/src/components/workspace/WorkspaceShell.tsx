@@ -27,6 +27,7 @@ import {
   XMarkIcon,
 } from "@heroicons/react/24/outline";
 import type { Project, Session, SessionStatus } from "../../api/types";
+import { APP_NAME } from "../../constants";
 import { useColorMode } from "../../state/colorMode";
 import { useWorkspace, type RightDrawerTab } from "../../state/workspaceContext";
 import { ArtifactDrawer } from "../artifacts/ArtifactDrawer";
@@ -80,13 +81,13 @@ export function WorkspaceShell() {
     defaultSize: 280,
     minSize: 220,
     maxSize: 520,
-    autoSaveId: "abyss.sidebar.width",
+    autoSaveId: "layout.sidebar.width",
   });
   const drawerResizable = useResizable({
     defaultSize: 460,
     minSize: 340,
     maxSize: 720,
-    autoSaveId: "abyss.drawer.width",
+    autoSaveId: "layout.drawer.width",
   });
 
   const dirtyCount = state.diff?.files.length ?? 0;
@@ -118,7 +119,7 @@ export function WorkspaceShell() {
       padding={0}
       header={
         <VStack gap={2} padding={3}>
-          <SideNavHeading heading="Abyss" subheading="DeepAgents v2" />
+          <SideNavHeading heading={APP_NAME} />
           <Button
             label="Add Project"
             variant="primary"

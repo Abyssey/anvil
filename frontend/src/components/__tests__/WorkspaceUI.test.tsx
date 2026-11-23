@@ -127,7 +127,7 @@ function renderWorkspace(value: WorkspaceContextValue) {
   );
 }
 
-describe("Abyss Workspace UI (Astryx + HITL)", () => {
+describe("Workspace UI (Astryx + HITL)", () => {
   it("supports switching modes (Ask / Plan / Auto) and opening Settings", () => {
     const val = makeMockValue();
     renderWorkspace(val);
@@ -241,7 +241,7 @@ describe("Abyss Workspace UI (Astryx + HITL)", () => {
     });
     renderWorkspace(val);
 
-    expect(screen.getByRole("heading", { name: "Abyss Coding Agent" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Anvil Coding Agent" })).toBeInTheDocument();
     expect(screen.getByText("Configure your LLM endpoint")).toBeInTheDocument();
 
     const onboardingBtn = screen.getByRole("button", {

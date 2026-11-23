@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Final
+
+APP_NAME: Final[str] = "Anvil"
 
 
 @dataclass(frozen=True)
 class AppConfig:
-    """Immutable filesystem paths and runtime defaults for Abyss v2."""
+    """Immutable filesystem paths and runtime defaults."""
 
     data_dir: Path
     sqlite_path: Path
@@ -33,7 +36,7 @@ class AppConfig:
         dist_dir = frontend_dist_dir or (repo_root / "frontend" / "dist")
         return cls(
             data_dir=resolved_data,
-            sqlite_path=resolved_data / "abyss.db",
+            sqlite_path=resolved_data / "sessions.db",
             artifacts_root=resolved_data / "artifacts",
             bundled_skills_dir=skills_dir.resolve(),
             default_workspace_path=(default_workspace_path or repo_root).resolve(),
@@ -44,7 +47,7 @@ class AppConfig:
     def from_repo_root(cls, repo_root: Path | None = None) -> AppConfig:
         root = (repo_root or Path(__file__).resolve().parents[3]).resolve()
         return cls.for_data_dir(
-            root / ".abyss-data",
+            root / ".data",
             default_workspace_path=root,
             frontend_dist_dir=root / "frontend" / "dist",
         )

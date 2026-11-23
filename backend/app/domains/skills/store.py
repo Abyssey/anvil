@@ -32,7 +32,7 @@ from backend.app.shared.errors import DomainError, InvalidWorkspaceError, PathEs
 
 logger = logging.getLogger(__name__)
 
-PROVENANCE_FILENAME = ".abyss-skill.json"
+PROVENANCE_FILENAME = ".skill-meta.json"
 
 
 def _read_provenance(skill_dir: Path) -> dict[str, object]:

@@ -4,7 +4,7 @@ import { defaultThemeSlug, themes } from "../astryx-themes";
 
 export type ColorMode = "system" | "light" | "dark";
 
-const STORAGE_KEY = "abyss.color_mode";
+const STORAGE_KEY = "ui.color_mode";
 
 interface ColorModeContextValue {
   colorMode: ColorMode;

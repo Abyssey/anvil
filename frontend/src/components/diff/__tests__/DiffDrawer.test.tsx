@@ -142,10 +142,10 @@ function makeWorkspaceValue(
   };
 }
 
-describe("DiffDrawer + Abyss theme", () => {
-  it("uses abyss as the default Astryx theme", () => {
-    expect(defaultThemeSlug).toBe("abyss");
-    expect(themes.abyss).toBeDefined();
+describe("DiffDrawer + Workbench theme", () => {
+  it("uses workbench as the default Astryx theme", () => {
+    expect(defaultThemeSlug).toBe("workbench");
+    expect(themes.workbench).toBeDefined();
   });
 
   it("infers syntax language on CodeBlock and resets selectedPath on session/workspace switch", () => {
