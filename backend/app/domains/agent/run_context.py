@@ -12,7 +12,9 @@ from typing import TYPE_CHECKING
 from backend.app.domains.agent.shell_guard import ShellGuard
 
 if TYPE_CHECKING:
+    from backend.app.domains.agent.checkpoints import CheckpointCapture
     from backend.app.domains.agent.middleware.git_evidence import GitEvidenceTracker
+    from backend.app.domains.agent.middleware.verification import VerificationTracker
 
 
 @dataclass(frozen=True)
@@ -29,6 +31,8 @@ class RunCatalog:
     secret_values: tuple[str, ...] = ()
     extra_skills_dirs: tuple[Path, ...] = ()
     git_tracker: GitEvidenceTracker | None = field(default=None, compare=False)
+    checkpoint_capture: CheckpointCapture | None = field(default=None, compare=False)
+    verification_tracker: VerificationTracker | None = field(default=None, compare=False)
 
 
 _CURRENT_RUN: ContextVar[RunCatalog | None] = ContextVar("abyss_current_run", default=None)

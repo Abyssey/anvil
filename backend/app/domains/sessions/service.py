@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import time
 import uuid
@@ -19,6 +20,7 @@ from backend.app.domains.sessions.entities import (
     Project,
     ProjectMemory,
     QuestionAnswer,
+    RevertSessionResult,
     RunMode,
     Session,
     SessionStatus,
@@ -311,6 +313,100 @@ class SessionService:
         self._artifact_store.delete_session_artifacts(session_id)
         await self._delete_session_thread(session_id)
 
+    async def revert_from_message(
+        self,
+        session_id: str,
+        message_id: str,
+    ) -> RevertSessionResult:
+        """Revert workspace files, transcript, and LangGraph state to before the target turn."""
+        session = await self._repo.get_session(session_id)
+        if session.status == SessionStatus.RUNNING:
+            raise DomainError(
+                "Cannot revert while the session is actively streaming. Stop the run first.",
+                status_code=409,
+                code="SESSION_RUNNING",
+            )
+
+        all_messages = await self._repo.list_messages(session_id)
+        target_idx = next(
+            (idx for idx, msg in enumerate(all_messages) if msg.id == message_id),
+            None,
+        )
+        if target_idx is None:
+            raise DomainError(
+                f"Message '{message_id}' not found in session '{session_id}'.",
+                status_code=404,
+                code="MESSAGE_NOT_FOUND",
+            )
+
+        turn_start_idx = target_idx
+        if all_messages[turn_start_idx].role == "assistant":
+            while turn_start_idx > 0:
+                prev_msg = all_messages[turn_start_idx - 1]
+                if prev_msg.role == "assistant":
+                    turn_start_idx -= 1
+                    continue
+                # Walk past synthesized Q&A resume messages back to the originating user prompt
+                is_qa_resume = prev_msg.content.startswith(("Q. ", "1. Q. ", "질문 건너뜀"))
+                if is_qa_resume and turn_start_idx >= 2:
+                    turn_start_idx -= 1
+                    continue
+                turn_start_idx -= 1
+                break
+
+        removed_slice = all_messages[turn_start_idx:]
+        rewound_user_prompt: str | None = None
+        for msg in removed_slice:
+            if msg.role == "user" and not msg.content.startswith(("Q. ", "1. Q. ", "질문 건너뜀")):
+                rewound_user_prompt = msg.content
+                break
+        if rewound_user_prompt is None and removed_slice and removed_slice[0].role == "user":
+            rewound_user_prompt = removed_slice[0].content
+
+        checkpoint_ids_newest_first = [
+            msg.checkpoint_id
+            for msg in reversed(removed_slice)
+            if msg.checkpoint_id is not None
+        ]
+
+        if hasattr(self._harness, "revert_checkpoints"):
+            reverted_files = await self._harness.revert_checkpoints(
+                session.id,
+                Path(session.workspace_path),
+                checkpoint_ids_newest_first,
+            )
+        else:
+            reverted_files = []
+            await self._delete_session_thread(session.id)
+
+        await self._repo.truncate_messages_from(session.id, all_messages[turn_start_idx].id)
+        updated_session = await self._repo.update_session(
+            session.model_copy(
+                update={
+                    "status": SessionStatus.IDLE,
+                    "pending_interrupt": None,
+                }
+            )
+        )
+        await self._refresh_walkthrough_plan(session.id, session.workspace_path)
+        _, page_messages, has_more = await self.get_session_detail_page(session.id, limit=20)
+        logger.info(
+            "session.reverted",
+            extra={
+                "event": "session.reverted",
+                "session_id": session.id,
+                "from_message_id": all_messages[turn_start_idx].id,
+                "reverted_file_count": len(reverted_files),
+            },
+        )
+        return RevertSessionResult(
+            session=updated_session,
+            messages=page_messages,
+            has_more_messages=has_more,
+            reverted_files=reverted_files,
+            rewound_user_prompt=rewound_user_prompt,
+        )
+
     async def stream_message(
         self,
         *,
@@ -321,6 +417,9 @@ class SessionService:
         pinned_skills: list[str] | None = None,
     ) -> AsyncIterator[StreamEvent]:
         session = await self._repo.get_session(session_id)
+        prior_history = [
+            (m.role, m.content) for m in await self._repo.list_messages(session.id)
+        ]
         active_mode = mode or session.mode
         next_title = (
             content.strip().splitlines()[0][:60]
@@ -352,6 +451,11 @@ class SessionService:
             mode=active_mode.value,
             secrets=(creds.api_key,),
         ):
+            extra_kwargs: dict[str, object] = {}
+            if prior_history and "prior_messages" in inspect.signature(
+                self._harness.stream_run
+            ).parameters:
+                extra_kwargs["prior_messages"] = prior_history
             raw_stream = self._harness.stream_run(
                 session_id=session.id,
                 workspace_path=Path(session.workspace_path),
@@ -360,6 +464,7 @@ class SessionService:
                 creds=creds,
                 project_id=session.project_id or session.id,
                 pinned_skills=pinned_skills,
+                **extra_kwargs,  # type: ignore[arg-type]
             )
             async for ev in self._consume_and_persist_stream(
                 session,
@@ -457,6 +562,9 @@ class SessionService:
         tool_map: dict[str, ToolCallRecord] = {}
         tool_order: list[str] = []
         pending_interrupt: PendingInterrupt | None = None
+        turn_checkpoint_id: str | None = None
+        turn_changed_files: list[str] = []
+        turn_verification_stamp: str | None = None
         had_error = False
         was_cancelled = False
         start = time.perf_counter()
@@ -507,6 +615,21 @@ class SessionService:
                             "kind": pending_interrupt.kind,
                         },
                     )
+                elif h_event.event == "turn_meta":
+                    raw_cid = h_event.data.get("checkpoint_id")
+                    if isinstance(raw_cid, str) and raw_cid:
+                        turn_checkpoint_id = raw_cid
+                    raw_changed = h_event.data.get("changed_files")
+                    if isinstance(raw_changed, list):
+                        turn_changed_files = [str(p) for p in raw_changed if isinstance(p, str)]
+                    raw_stamp = h_event.data.get("verification_stamp")
+                    if isinstance(raw_stamp, str) and raw_stamp in {
+                        "passed",
+                        "failed",
+                        "none",
+                        "not_needed",
+                    }:
+                        turn_verification_stamp = raw_stamp
                 elif h_event.event == "diff_changed":
                     await self._refresh_walkthrough_plan(session.id, session.workspace_path)
                 elif h_event.event == "error":
@@ -552,6 +675,9 @@ class SessionService:
                     tool_map=tool_map,
                     tool_order=tool_order,
                     pending_interrupt=pending_interrupt,
+                    checkpoint_id=turn_checkpoint_id,
+                    changed_files=turn_changed_files,
+                    verification_stamp=turn_verification_stamp,
                     had_error=had_error,
                     was_cancelled=was_cancelled,
                 )
@@ -575,6 +701,9 @@ class SessionService:
         tool_map: dict[str, ToolCallRecord],
         tool_order: list[str],
         pending_interrupt: PendingInterrupt | None,
+        checkpoint_id: str | None = None,
+        changed_files: list[str] | None = None,
+        verification_stamp: str | None = None,
         had_error: bool,
         was_cancelled: bool,
     ) -> SessionStatus:
@@ -589,7 +718,12 @@ class SessionService:
             else tool_map[tid]
             for tid in tool_order
         ]
-        if content_text or thinking_text or tools:
+        valid_stamp = (
+            verification_stamp
+            if verification_stamp in {"passed", "failed", "none", "not_needed"}
+            else None
+        )
+        if content_text or thinking_text or tools or checkpoint_id is not None:
             await self._repo.append_message(
                 ChatMessage(
                     id=uuid.uuid4().hex[:12],
@@ -598,6 +732,9 @@ class SessionService:
                     content=content_text,
                     thinking=thinking_text,
                     tool_calls=tools,
+                    checkpoint_id=checkpoint_id,
+                    changed_files=list(changed_files or []),
+                    verification_stamp=valid_stamp,  # type: ignore[arg-type]
                     created_at=datetime.now(UTC),
                 )
             )

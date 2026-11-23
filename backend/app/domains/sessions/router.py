@@ -14,6 +14,7 @@ from backend.app.domains.sessions.entities import (
     Project,
     ProjectMemory,
     QuestionAnswer,
+    RevertSessionResult,
     RunMode,
     Session,
 )
@@ -65,6 +66,10 @@ class ResumeInterruptRequest(BaseModel):
     decision: Literal["approve", "revise", "deny", "answer", "skip"]
     feedback: str | None = None
     answers: list[QuestionAnswer] = Field(default_factory=list)
+
+
+class RevertSessionTurnRequest(BaseModel):
+    message_id: str = Field(min_length=1)
 
 
 @projects_router.get("")
@@ -180,6 +185,15 @@ async def delete_session(
     service: SessionServiceDep,
 ) -> None:
     await service.delete_session(session_id)
+
+
+@router.post("/{session_id}/revert")
+async def revert_session_turn(
+    session_id: str,
+    body: RevertSessionTurnRequest,
+    service: SessionServiceDep,
+) -> RevertSessionResult:
+    return await service.revert_from_message(session_id, body.message_id)
 
 
 @router.post("/{session_id}/messages/stream", response_class=EventSourceResponse)

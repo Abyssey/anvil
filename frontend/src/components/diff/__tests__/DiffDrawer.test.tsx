@@ -1,5 +1,5 @@
 import { Theme } from "@astryxdesign/core/theme";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { defaultThemeSlug, themes } from "../../../astryx-themes";
 import {
@@ -10,7 +10,10 @@ import {
 } from "../../../state/workspaceContext";
 import { DiffDrawer } from "../DiffDrawer";
 
-function makeWorkspaceValue(overrides: Partial<WorkspaceState> = {}): WorkspaceContextValue {
+function makeWorkspaceValue(
+  overrides: Partial<WorkspaceState> = {},
+  actionOverrides: Partial<WorkspaceActions> = {},
+): WorkspaceContextValue {
   const baseSession = {
     id: "sess-1",
     project_id: "proj-1",
@@ -127,7 +130,10 @@ function makeWorkspaceValue(overrides: Partial<WorkspaceState> = {}): WorkspaceC
     setActiveArtifactTab: vi.fn(),
     jumpToDiffHunk: vi.fn().mockResolvedValue(undefined),
     refreshDiff: vi.fn().mockResolvedValue(undefined),
+    revertFromMessage: vi.fn().mockResolvedValue(undefined),
+    revertDiffFiles: vi.fn().mockResolvedValue(undefined),
     saveArtifactToWorkspace: vi.fn().mockResolvedValue("/repo-a/docs/ONBOARDING.md"),
+    ...actionOverrides,
   };
   return {
     state,
@@ -215,5 +221,36 @@ describe("DiffDrawer + Abyss theme", () => {
     );
 
     expect(container.querySelector(".astryx-code-block")).toHaveAttribute("data-language", "go");
+  });
+
+  it("confirms via AlertDialog before reverting a single file or discarding all working-tree changes", async () => {
+    const revertDiffFiles = vi.fn().mockResolvedValue(undefined);
+    const val = makeWorkspaceValue({}, { revertDiffFiles });
+
+    render(
+      <Theme theme={themes[defaultThemeSlug]}>
+        <WorkspaceProvider initialValue={val}>
+          <DiffDrawer />
+        </WorkspaceProvider>
+      </Theme>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Revert File" }));
+    const fileDialog = screen.getByRole("alertdialog");
+    expect(fileDialog).toHaveTextContent("Revert backend/app.py?");
+    fireEvent.click(screen.getAllByRole("button", { name: "Revert File" }).at(-1)!);
+
+    await waitFor(() => {
+      expect(revertDiffFiles).toHaveBeenCalledWith(["backend/app.py"]);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Discard All" }));
+    const allDialog = screen.getByRole("alertdialog");
+    expect(allDialog).toHaveTextContent("Discard all working tree changes?");
+    fireEvent.click(screen.getAllByRole("button", { name: "Discard All" }).at(-1)!);
+
+    await waitFor(() => {
+      expect(revertDiffFiles).toHaveBeenCalledWith(undefined);
+    });
   });
 });

@@ -11,6 +11,8 @@ export interface ToolCallRecord {
   subagent?: string | null;
 }
 
+export type VerificationStamp = "passed" | "failed" | "none" | "not_needed";
+
 export interface ChatMessage {
   id: string;
   session_id: string;
@@ -18,6 +20,9 @@ export interface ChatMessage {
   content: string;
   thinking: string;
   tool_calls: ToolCallRecord[];
+  checkpoint_id?: string | null;
+  changed_files?: string[];
+  verification_stamp?: VerificationStamp | null;
   created_at: string;
 }
 
@@ -158,6 +163,14 @@ export interface SessionDetail {
   session: Session;
   messages: ChatMessage[];
   has_more_messages?: boolean;
+}
+
+export interface RevertSessionResponse {
+  session: Session;
+  messages: ChatMessage[];
+  has_more_messages: boolean;
+  reverted_files: string[];
+  rewound_user_prompt: string | null;
 }
 
 export interface MessagePageResponse {

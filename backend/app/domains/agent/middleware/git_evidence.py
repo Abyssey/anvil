@@ -87,16 +87,20 @@ class GitEvidenceTracker:
 
 
 class GitEvidenceMiddleware(AgentMiddleware):
-    """Records baseline git state on run start and refreshes after mutating tools."""
+    """Records baseline git/checkpoint snapshots on run start and refreshes after mutations."""
 
     async def abefore_agent(
         self,
         state: AgentState[Any],
         runtime: Runtime[Any],
     ) -> dict[str, Any] | None:
+        del state, runtime
         catalog = RunContext.current_or_none()
-        if catalog is not None and catalog.git_tracker is not None:
-            await catalog.git_tracker.capture_baseline()
+        if catalog is not None:
+            if catalog.git_tracker is not None:
+                await catalog.git_tracker.capture_baseline()
+            if catalog.checkpoint_capture is not None and catalog.mode in {"plan", "auto"}:
+                await catalog.checkpoint_capture.capture_baseline()
         return None
 
     async def awrap_tool_call(
@@ -104,10 +108,20 @@ class GitEvidenceMiddleware(AgentMiddleware):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command]],
     ) -> ToolMessage | Command:
-        result = await handler(request)
         tool_name = str(request.tool_call.get("name") or "")
-        if tool_name in _MUTATING_TOOLS:
-            catalog = RunContext.current_or_none()
-            if catalog is not None and catalog.git_tracker is not None:
-                await catalog.git_tracker.refresh()
+        catalog = RunContext.current_or_none()
+        if (
+            catalog is not None
+            and catalog.checkpoint_capture is not None
+            and catalog.mode in {"plan", "auto"}
+            and tool_name in {"write_file", "edit_file", "delete"}
+        ):
+            args = request.tool_call.get("args") or {}
+            file_path = str(args.get("file_path") or "")
+            if file_path:
+                await catalog.checkpoint_capture.snapshot_before_write(file_path)
+
+        result = await handler(request)
+        if tool_name in _MUTATING_TOOLS and catalog is not None and catalog.git_tracker is not None:
+            await catalog.git_tracker.refresh()
         return result

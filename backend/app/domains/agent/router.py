@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Query
+from pydantic import BaseModel, Field
 
 from backend.app.domains.agent.workspace import (
     DirectoryBrowseResponse,
@@ -72,6 +73,19 @@ async def get_workspace_diff(
     inspector: WorkspaceInspectorDep,
 ) -> WorkspaceDiffResponse:
     return await inspector.get_diff(path)
+
+
+class RevertWorkspaceDiffRequest(BaseModel):
+    path: str = Field(min_length=1)
+    files: list[str] | None = None
+
+
+@router.post("/diff/revert")
+async def revert_workspace_diff(
+    body: RevertWorkspaceDiffRequest,
+    inspector: WorkspaceInspectorDep,
+) -> WorkspaceDiffResponse:
+    return await inspector.revert_diff(body.path, files=body.files)
 
 
 @router.post("/llm-ping")

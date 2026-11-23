@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from backend.app.domains.agent.git_utils import run_git
 from backend.app.domains.artifacts.entities import DiffHunk, FileDiff
 from backend.app.domains.artifacts.walkthrough_diff import parse_unified_diff
-from backend.app.shared.errors import InvalidWorkspaceError, PathEscapeError
+from backend.app.shared.errors import DomainError, InvalidWorkspaceError, PathEscapeError
 
 _IGNORED_NAMES = frozenset(
     {".git", "node_modules", ".venv", "__pycache__", "dist", ".abyss-data", ".pytest_cache"}
@@ -229,6 +229,58 @@ class WorkspaceInspector:
             git_head=git_head,
             files=files,
         )
+
+    async def revert_diff(
+        self,
+        workspace_path: str,
+        *,
+        files: list[str] | None = None,
+    ) -> WorkspaceDiffResponse:
+        """Revert specific dirty/untracked files or the entire git working tree back to HEAD."""
+        root = self._resolve_root(workspace_path)
+        is_git = (root / ".git").exists() or (
+            await run_git(root, "rev-parse", "--is-inside-work-tree") == "true"
+        )
+        if not is_git:
+            raise DomainError(
+                "Workspace is not a Git repository; use session turn revert instead.",
+                status_code=400,
+                code="GIT_REPO_REQUIRED",
+            )
+
+        if files is not None:
+            for rel in files:
+                target = self._resolve_inside(root, rel)
+                if target == root:
+                    raise PathEscapeError(rel)
+                norm_rel = target.relative_to(root).as_posix()
+                tracked_probe = await run_git(root, "ls-files", "--error-unmatch", "--", norm_rel)
+                if tracked_probe:
+                    await run_git(root, "checkout", "HEAD", "--", norm_rel)
+                else:
+                    if target.is_file() or target.is_symlink():
+                        await asyncio.to_thread(target.unlink)
+        else:
+            status_raw = await run_git(root, "status", "--porcelain", "-uall")
+            untracked: list[Path] = []
+            has_tracked = False
+            for line in status_raw.splitlines():
+                if not line.strip() or len(line) < 4:
+                    continue
+                if line.startswith("?? "):
+                    rel_untracked = line[3:].strip()
+                    target = self._resolve_inside(root, rel_untracked)
+                    if target != root:
+                        untracked.append(target)
+                else:
+                    has_tracked = True
+            if has_tracked:
+                await run_git(root, "checkout", "HEAD", "--", ".")
+            for target in untracked:
+                if target.is_file() or target.is_symlink():
+                    await asyncio.to_thread(target.unlink)
+
+        return await self.get_diff(str(root))
 
     @staticmethod
     def _resolve_root(workspace_path: str) -> Path:

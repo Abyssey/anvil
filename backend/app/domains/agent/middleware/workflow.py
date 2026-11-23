@@ -94,18 +94,51 @@ class ArtifactWorkflowMiddleware(AgentMiddleware[ArtifactWorkflowState, Any, Any
                     tool_call_id=tool_call_id,
                     status="error",
                 )
+            if (
+                not is_artifact_write
+                and not is_memory_write
+                and catalog.shell_guard.is_verifier_rule_path(normalized_path)
+            ):
+                decision = interrupt(
+                    {
+                        "kind": "shell_approval",
+                        "command": f"{tool_name} {normalized_path}",
+                        "workspace": str(catalog.workspace_path),
+                        "reason": (
+                            "Modifying verification, architecture boundary, or review rule files "
+                            "requires explicit user approval so checks stay independent."
+                        ),
+                        "summary": f"Approve modifying governance/check file: {normalized_path}",
+                    }
+                )
+                approved = isinstance(decision, Mapping) and decision.get("decision") == "approve"
+                if not approved:
+                    return ToolMessage(
+                        content=(
+                            f"Modification of governance/check file denied by user: "
+                            f"{normalized_path}"
+                        ),
+                        name=tool_name,
+                        tool_call_id=tool_call_id,
+                        status="error",
+                    )
             return await handler(request)
 
         if tool_name == "execute":
             command = str(args.get("command") or "")
-            if catalog.mode == "plan" and not request.state.get("plan_approved", False):
+            plan_approved = bool(request.state.get("plan_approved", False))
+            if catalog.mode == "plan" and not plan_approved:
                 return ToolMessage(
                     content="Plan approval required before executing shell commands.",
                     name="execute",
                     tool_call_id=tool_call_id,
                     status="error",
                 )
-            verdict = catalog.shell_guard.evaluate(command, catalog.mode)
+            verdict = catalog.shell_guard.evaluate(
+                command,
+                catalog.mode,
+                plan_approved=plan_approved,
+            )
             if verdict.action == ShellAction.BLOCK:
                 return ToolMessage(
                     content=f"Command blocked: {verdict.reason}",

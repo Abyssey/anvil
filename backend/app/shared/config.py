@@ -57,8 +57,13 @@ class AppConfig:
     def memories_root(self) -> Path:
         return self.data_dir / "memories"
 
+    @property
+    def checkpoints_root(self) -> Path:
+        return self.data_dir / "checkpoints"
+
     def ensure_directories(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.artifacts_root.mkdir(parents=True, exist_ok=True)
         self.skills_root.mkdir(parents=True, exist_ok=True)
         self.memories_root.mkdir(parents=True, exist_ok=True)
+        self.checkpoints_root.mkdir(parents=True, exist_ok=True)

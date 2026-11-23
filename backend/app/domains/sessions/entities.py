@@ -38,6 +38,9 @@ class ChatMessage(BaseModel):
     content: str
     thinking: str = ""
     tool_calls: list[ToolCallRecord] = Field(default_factory=list)
+    checkpoint_id: str | None = None
+    changed_files: list[str] = Field(default_factory=list)
+    verification_stamp: Literal["passed", "failed", "none", "not_needed"] | None = None
     created_at: datetime
 
 
@@ -102,3 +105,11 @@ class Session(BaseModel):
 class StreamEvent(BaseModel):
     event: str
     data: dict[str, object] = Field(default_factory=dict)
+
+
+class RevertSessionResult(BaseModel):
+    session: Session
+    messages: list[ChatMessage]
+    has_more_messages: bool = False
+    reverted_files: list[str] = Field(default_factory=list)
+    rewound_user_prompt: str | None = None

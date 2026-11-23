@@ -21,7 +21,7 @@ from backend.app.domains.sessions.entities import (
     SessionStatus,
     ToolCallRecord,
 )
-from backend.app.shared.errors import ProjectNotFoundError, SessionNotFoundError
+from backend.app.shared.errors import DomainError, ProjectNotFoundError, SessionNotFoundError
 
 
 class SessionRepository(Protocol):
@@ -45,6 +45,11 @@ class SessionRepository(Protocol):
         before_id: str | None = None,
         limit: int = 20,
     ) -> tuple[list[ChatMessage], bool]: ...
+    async def truncate_messages_from(
+        self,
+        session_id: str,
+        from_message_id: str,
+    ) -> list[ChatMessage]: ...
 
 
 class SQLiteSessionRepository:
@@ -138,10 +143,17 @@ class SQLiteSessionRepository:
                     content TEXT NOT NULL,
                     thinking TEXT NOT NULL DEFAULT '',
                     tool_calls_json TEXT NOT NULL DEFAULT '[]',
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL
                 )
                 """
             )
+            async with db.execute("PRAGMA table_info(messages)") as mcur:
+                msg_columns = {row["name"] for row in await mcur.fetchall()}
+            if "metadata_json" not in msg_columns:
+                await db.execute(
+                    "ALTER TABLE messages ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'"
+                )
             await db.commit()
 
     async def list_projects(self) -> list[Project]:
@@ -282,13 +294,22 @@ class SQLiteSessionRepository:
 
     async def append_message(self, message: ChatMessage) -> ChatMessage:
         tool_json = json.dumps([tc.model_dump(mode="json") for tc in message.tool_calls])
+        meta_payload: dict[str, object] = {}
+        if message.checkpoint_id is not None:
+            meta_payload["checkpoint_id"] = message.checkpoint_id
+        if message.changed_files:
+            meta_payload["changed_files"] = list(message.changed_files)
+        if message.verification_stamp is not None:
+            meta_payload["verification_stamp"] = message.verification_stamp
+        metadata_json = json.dumps(meta_payload, ensure_ascii=False)
         async with self._connect() as db:
             await db.execute(
                 """
                 INSERT INTO messages (
-                    id, session_id, role, content, thinking, tool_calls_json, created_at
+                    id, session_id, role, content, thinking, tool_calls_json,
+                    metadata_json, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     message.id,
@@ -297,6 +318,7 @@ class SQLiteSessionRepository:
                     message.content,
                     message.thinking,
                     tool_json,
+                    metadata_json,
                     message.created_at.isoformat(),
                 ),
             )
@@ -362,9 +384,78 @@ class SQLiteSessionRepository:
         page_rows = list(reversed(rows[:limit]))
         return [self._row_to_message(row) for row in page_rows], has_more
 
+    async def truncate_messages_from(
+        self,
+        session_id: str,
+        from_message_id: str,
+    ) -> list[ChatMessage]:
+        await self.get_session(session_id)
+        async with self._connect() as db:
+            async with db.execute(
+                "SELECT created_at, rowid FROM messages WHERE session_id = ? AND id = ?",
+                (session_id, from_message_id),
+            ) as cur:
+                anchor = await cur.fetchone()
+            if anchor is None:
+                raise DomainError(
+                    f"Message '{from_message_id}' not found in session '{session_id}'.",
+                    status_code=404,
+                    code="MESSAGE_NOT_FOUND",
+                )
+            async with db.execute(
+                """
+                SELECT * FROM messages
+                WHERE session_id = ?
+                  AND (created_at > ? OR (created_at = ? AND rowid >= ?))
+                ORDER BY created_at ASC, rowid ASC
+                """,
+                (
+                    session_id,
+                    anchor["created_at"],
+                    anchor["created_at"],
+                    anchor["rowid"],
+                ),
+            ) as cursor:
+                rows = await cursor.fetchall()
+
+            deleted = [self._row_to_message(row) for row in rows]
+            if deleted:
+                placeholders = ", ".join("?" for _ in deleted)
+                await db.execute(
+                    f"DELETE FROM messages WHERE session_id = ? AND id IN ({placeholders})",
+                    (session_id, *[m.id for m in deleted]),
+                )
+                await db.commit()
+        return deleted
+
     @staticmethod
     def _row_to_message(row: aiosqlite.Row) -> ChatMessage:
         raw_tools = json.loads(row["tool_calls_json"])
+        try:
+            raw_meta_str = row["metadata_json"]
+        except IndexError:
+            raw_meta_str = "{}"
+        try:
+            meta = json.loads(raw_meta_str or "{}")
+        except (TypeError, ValueError):
+            meta = {}
+        checkpoint_id = (
+            str(meta["checkpoint_id"])
+            if isinstance(meta.get("checkpoint_id"), str) and meta["checkpoint_id"]
+            else None
+        )
+        raw_changed = meta.get("changed_files")
+        changed_files = (
+            [str(p) for p in raw_changed if isinstance(p, str)]
+            if isinstance(raw_changed, list)
+            else []
+        )
+        raw_stamp = meta.get("verification_stamp")
+        verification_stamp = (
+            raw_stamp
+            if raw_stamp in {"passed", "failed", "none", "not_needed"}
+            else None
+        )
         return ChatMessage(
             id=row["id"],
             session_id=row["session_id"],
@@ -372,6 +463,9 @@ class SQLiteSessionRepository:
             content=row["content"],
             thinking=row["thinking"],
             tool_calls=[ToolCallRecord.model_validate(tc) for tc in raw_tools],
+            checkpoint_id=checkpoint_id,
+            changed_files=changed_files,
+            verification_stamp=verification_stamp,
             created_at=datetime.fromisoformat(row["created_at"]),
         )
 

@@ -123,6 +123,8 @@ function makeSkillsMockValue(
     setActiveArtifactTab: vi.fn(),
     jumpToDiffHunk: vi.fn().mockResolvedValue(undefined),
     refreshDiff: vi.fn().mockResolvedValue(undefined),
+    revertFromMessage: vi.fn().mockResolvedValue(undefined),
+    revertDiffFiles: vi.fn().mockResolvedValue(undefined),
     saveArtifactToWorkspace: vi.fn().mockResolvedValue("/repo/docs/ONBOARDING.md"),
     ...actionOverrides,
   };

@@ -45,17 +45,20 @@ _MODE_PROMPTS: dict[str, str] = {
         "first with `recommended=true`) and use the answers to draft a concrete plan in "
         "`/artifacts/implementation_plan.md`.\n"
         "- Wait for user approval before mutating workspace files.\n"
-        "- Keep `/artifacts/task.md` synced via `write_todos` during implementation, run "
-        "verification checks, and record evidence in `/artifacts/walkthrough.md`."
+        "- Keep `/artifacts/task.md` synced via `write_todos` during implementation, follow "
+        "`/skills/verify/SKILL.md` to run fast local verification checks (max 3 repair strikes; "
+        "never weaken checks), and record concrete evidence in `/artifacts/walkthrough.md`."
     ),
     "auto": (
         "## Auto mode (Autonomous Execution)\n"
         "- Inspect the repository, execute necessary edits and safe checks directly, "
-        "track progress via `write_todos`, and document results in `/artifacts/walkthrough.md`.\n"
+        "track progress via `write_todos`, follow `/skills/verify/SKILL.md` to verify changes "
+        "with concrete evidence (max 3 repair strikes; never weaken checks), and document "
+        "results in `/artifacts/walkthrough.md`.\n"
         "- Do not interrupt with `ask_user` for routine decisions; only call `ask_user` when a "
         "critical ambiguity would risk wrong or irreversible changes (or if an active skill "
         "explicitly asks to interview the user).\n"
-        "- Destructive shell commands still require user approval."
+        "- Destructive shell commands and edits to governance/check files require user approval."
     ),
 }
 

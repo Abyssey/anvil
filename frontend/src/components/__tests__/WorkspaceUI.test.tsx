@@ -103,6 +103,8 @@ function makeMockValue(
     setActiveArtifactTab: vi.fn(),
     jumpToDiffHunk: vi.fn().mockResolvedValue(undefined),
     refreshDiff: vi.fn().mockResolvedValue(undefined),
+    revertFromMessage: vi.fn().mockResolvedValue(undefined),
+    revertDiffFiles: vi.fn().mockResolvedValue(undefined),
     saveArtifactToWorkspace: vi.fn().mockResolvedValue("/repo/docs/ONBOARDING.md"),
     ...actionOverrides,
   };
@@ -689,5 +691,72 @@ describe("Abyss Workspace UI (Astryx + HITL)", () => {
     expect(screen.getByText("read_file")).toBeInTheDocument();
     expect(screen.getByText("grep")).toBeInTheDocument();
     expect(screen.getByText("App.tsx 읽는 중...")).toBeInTheDocument();
+  });
+
+  it("renders Verified stamp and Revert action on assistant turns, confirms via AlertDialog, and restores rewound prompt to Composer", async () => {
+    const revertFromMessage = vi.fn().mockResolvedValue(undefined);
+    const initialVal = makeMockValue(
+      {
+        messages: [
+          {
+            id: "u-turn-1",
+            session_id: "sess-1",
+            role: "user",
+            content: "Refactor parser and run pytest",
+            thinking: "",
+            tool_calls: [],
+            created_at: "2026-11-23T01:00:00Z",
+          },
+          {
+            id: "a-turn-1",
+            session_id: "sess-1",
+            role: "assistant",
+            content: "Refactored parser and verified tests.",
+            thinking: "",
+            tool_calls: [],
+            checkpoint_id: "cp-111",
+            changed_files: ["backend/parser.py", "tests/test_parser.py"],
+            verification_stamp: "passed",
+            created_at: "2026-11-23T01:00:08Z",
+          },
+        ],
+      },
+      { revertFromMessage },
+    );
+
+    const { rerender } = renderWorkspace(initialVal);
+
+    expect(screen.getByText("Verified")).toBeInTheDocument();
+    const revertBtn = screen.getByRole("button", { name: "Revert (2)" });
+    fireEvent.click(revertBtn);
+
+    const alertDialog = screen.getByRole("alertdialog");
+    expect(alertDialog).toHaveTextContent("Revert to before this turn?");
+    expect(alertDialog).toHaveTextContent("backend/parser.py, tests/test_parser.py");
+
+    fireEvent.click(within(alertDialog).getByRole("button", { name: "Revert Turn" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(revertFromMessage).toHaveBeenCalledWith("a-turn-1");
+
+    // Simulate post-revert state where messages are empty and rewoundDraft populates Composer
+    const rewoundVal = makeMockValue({
+      messages: [],
+      rewoundDraft: { text: "Refactor parser and run pytest", seq: 1 },
+    });
+    rerender(
+      <Theme theme={themes[defaultThemeSlug]}>
+        <WorkspaceProvider initialValue={rewoundVal}>
+          <WorkspaceShell />
+          <SettingsDialog />
+          <AddProjectDialog />
+        </WorkspaceProvider>
+      </Theme>,
+    );
+
+    expect(screen.getByRole("textbox", { name: "Message input" })).toHaveTextContent(
+      "Refactor parser and run pytest",
+    );
   });
 });

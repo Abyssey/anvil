@@ -107,6 +107,8 @@ function makeMemoryMockValue(
     setActiveArtifactTab: vi.fn(),
     jumpToDiffHunk: vi.fn().mockResolvedValue(undefined),
     refreshDiff: vi.fn().mockResolvedValue(undefined),
+    revertFromMessage: vi.fn().mockResolvedValue(undefined),
+    revertDiffFiles: vi.fn().mockResolvedValue(undefined),
     saveArtifactToWorkspace: vi.fn().mockResolvedValue("/work/alpha-service/docs/ONBOARDING.md"),
     ...actionOverrides,
   };

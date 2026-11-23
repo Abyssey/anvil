@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChatComposer, ChatComposerDrawer } from "@astryxdesign/core/Chat";
 import { SegmentedControl, SegmentedControlItem } from "@astryxdesign/core/SegmentedControl";
 import { HStack, VStack } from "@astryxdesign/core/Stack";
@@ -16,6 +16,14 @@ const PLACEHOLDER_BY_MODE: Record<RunMode, string> = {
 export function Composer() {
   const { state, actions } = useWorkspace();
   const [draft, setDraft] = useState("");
+  const lastRewoundSeqRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (state.rewoundDraft && state.rewoundDraft.seq !== lastRewoundSeqRef.current) {
+      lastRewoundSeqRef.current = state.rewoundDraft.seq;
+      setDraft(state.rewoundDraft.text);
+    }
+  }, [state.rewoundDraft]);
 
   const pendingInterrupt = state.activeSession?.pending_interrupt ?? null;
   const hasPendingInterrupt = Boolean(pendingInterrupt);

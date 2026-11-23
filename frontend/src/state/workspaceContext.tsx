@@ -73,6 +73,7 @@ export interface WorkspaceState {
   activeArtifactTab: ArtifactKind;
   streamError: string | null;
   treeRevision: number;
+  rewoundDraft?: { text: string; seq: number } | null;
 }
 
 export type ResumeDecision = "approve" | "revise" | "deny" | "answer" | "skip";
@@ -112,6 +113,8 @@ export interface WorkspaceActions {
   setActiveArtifactTab: (kind: ArtifactKind) => void;
   jumpToDiffHunk: (path: string, hunkName?: string) => Promise<void>;
   refreshDiff: () => Promise<void>;
+  revertFromMessage: (messageId: string) => Promise<void>;
+  revertDiffFiles: (files?: string[]) => Promise<void>;
   saveArtifactToWorkspace: (kind: ArtifactKind, relativePath: string) => Promise<string>;
 }
 
@@ -258,6 +261,7 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
     useState<ArtifactKind>("walkthrough");
   const [streamError, setStreamError] = useState<string | null>(null);
   const [treeRevision, setTreeRevision] = useState(0);
+  const [rewoundDraft, setRewoundDraft] = useState<{ text: string; seq: number } | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const loadingOlderRef = useRef(false);
@@ -295,6 +299,7 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
     setHasMoreMessages(false);
     setIsLoadingOlderMessages(false);
     setPinnedSkills([]);
+    setRewoundDraft(null);
   }, []);
 
   const refreshInstalledSkills = useCallback(async () => {
@@ -1007,6 +1012,74 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const revertFromMessage = useCallback(
+    async (messageId: string) => {
+      const session = activeSessionRef.current;
+      if (!session || isStreaming) return;
+      setStreamError(null);
+      try {
+        const res = await apiClient.revertSessionTurn(session.id, messageId);
+        if (activeSessionRef.current?.id !== session.id) {
+          return;
+        }
+        activeSessionRef.current = res.session;
+        setActiveSession(res.session);
+        setSessions((prev) => prev.map((s) => (s.id === res.session.id ? res.session : s)));
+        setMessages(res.messages);
+        setHasMoreMessages(res.has_more_messages);
+        if (res.rewound_user_prompt) {
+          setRewoundDraft({ text: res.rewound_user_prompt, seq: Date.now() });
+        }
+        setTreeRevision((n) => n + 1);
+        const [artBundle, diffData] = await Promise.all([
+          apiClient.listArtifacts(session.id).catch(() => null),
+          session.workspace_path
+            ? apiClient.getWorkspaceDiff(session.workspace_path).catch(() => null)
+            : Promise.resolve(null),
+        ]);
+        if (activeSessionRef.current?.id !== session.id) {
+          return;
+        }
+        if (artBundle) {
+          setArtifacts(artBundle);
+        }
+        if (diffData) {
+          setDiff(diffData);
+        }
+      } catch (err) {
+        setStreamError(err instanceof Error ? err.message : "Failed to revert turn");
+        throw err;
+      }
+    },
+    [isStreaming],
+  );
+
+  const revertDiffFiles = useCallback(
+    async (files?: string[]) => {
+      const targetPath = workspacePathRef.current;
+      if (!targetPath || isStreaming) return;
+      setStreamError(null);
+      try {
+        const diffData = await apiClient.revertWorkspaceDiff(targetPath, files);
+        if (workspacePathRef.current === targetPath) {
+          setDiff(diffData);
+          setTreeRevision((n) => n + 1);
+        }
+        const session = activeSessionRef.current;
+        if (session) {
+          const artBundle = await apiClient.listArtifacts(session.id).catch(() => null);
+          if (artBundle && activeSessionRef.current?.id === session.id) {
+            setArtifacts(artBundle);
+          }
+        }
+      } catch (err) {
+        setStreamError(err instanceof Error ? err.message : "Failed to revert workspace diff");
+        throw err;
+      }
+    },
+    [isStreaming],
+  );
+
   const jumpToDiffHunk = useCallback(
     async (path: string, hunkName?: string) => {
       setDiffFocus({ path, hunkName });
@@ -1064,6 +1137,7 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
       activeArtifactTab,
       streamError,
       treeRevision,
+      rewoundDraft,
     },
     actions: {
       openSettings,
@@ -1096,6 +1170,8 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
       setActiveArtifactTab,
       jumpToDiffHunk,
       refreshDiff,
+      revertFromMessage,
+      revertDiffFiles,
       saveArtifactToWorkspace,
     },
     meta: {

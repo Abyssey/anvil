@@ -10,6 +10,7 @@ import type {
   Project,
   ProjectMemory,
   RemoteSkillSummary,
+  RevertSessionResponse,
   RunMode,
   Session,
   SessionDetail,
@@ -201,6 +202,14 @@ export const apiClient = {
     return fetchJson(`/api/workspace/diff?path=${encodeURIComponent(path)}`);
   },
 
+  revertWorkspaceDiff(path: string, files?: string[]): Promise<WorkspaceDiff> {
+    return fetchJson("/api/workspace/diff/revert", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path, files: files ?? null }),
+    });
+  },
+
   pingLLM(settings: LLMSettings): Promise<{ ok: boolean; base_url: string; model: string }> {
     return fetchJson("/api/workspace/llm-ping", {
       method: "POST",
@@ -261,6 +270,14 @@ export const apiClient = {
   deleteSession(sessionId: string): Promise<void> {
     return fetchJson(`/api/sessions/${encodeURIComponent(sessionId)}`, {
       method: "DELETE",
+    });
+  },
+
+  revertSessionTurn(sessionId: string, messageId: string): Promise<RevertSessionResponse> {
+    return fetchJson(`/api/sessions/${encodeURIComponent(sessionId)}/revert`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message_id: messageId }),
     });
   },
 

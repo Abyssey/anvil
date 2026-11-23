@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Avatar } from "@astryxdesign/core/Avatar";
+import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import {
@@ -11,10 +13,13 @@ import {
 } from "@astryxdesign/core/Chat";
 import { Collapsible } from "@astryxdesign/core/Collapsible";
 import { Heading } from "@astryxdesign/core/Heading";
+import { Icon } from "@astryxdesign/core/Icon";
 import { Markdown } from "@astryxdesign/core/Markdown";
 import { Spinner } from "@astryxdesign/core/Spinner";
 import { HStack, VStack } from "@astryxdesign/core/Stack";
 import { Text } from "@astryxdesign/core/Text";
+import { ArrowUturnLeftIcon } from "@heroicons/react/24/outline";
+import type { ChatMessage as ChatMessageEntity } from "../../api/types";
 import { useWorkspace } from "../../state/workspaceContext";
 import {
   computeAssistantTurnDurationMs,
@@ -33,6 +38,72 @@ import { ShellApprovalCard } from "./ShellApprovalCard";
 
 const ONBOARDING_SAMPLE_PROMPT =
   "이 프로젝트 구조와 핵심 의존성을 파악해서 온보딩 문서로 정리해줘";
+
+function isSynthesizedQaPrompt(content: string): boolean {
+  return (
+    content.startsWith("Q. ") ||
+    content.startsWith("1. Q. ") ||
+    content.startsWith("질문 건너뜀")
+  );
+}
+
+function summarizeRevertImpact(
+  messages: readonly ChatMessageEntity[],
+  targetMessageId: string | null,
+): { affectedFiles: string[]; laterTurnCount: number } {
+  if (!targetMessageId) {
+    return { affectedFiles: [], laterTurnCount: 0 };
+  }
+  const targetIdx = messages.findIndex((m) => m.id === targetMessageId);
+  if (targetIdx < 0) {
+    return { affectedFiles: [], laterTurnCount: 0 };
+  }
+  let turnStartIdx = targetIdx;
+  if (messages[turnStartIdx].role === "assistant") {
+    while (turnStartIdx > 0) {
+      const prev = messages[turnStartIdx - 1];
+      if (prev.role === "assistant") {
+        turnStartIdx -= 1;
+        continue;
+      }
+      if (isSynthesizedQaPrompt(prev.content) && turnStartIdx >= 2) {
+        turnStartIdx -= 1;
+        continue;
+      }
+      turnStartIdx -= 1;
+      break;
+    }
+  }
+  const seen = new Set<string>();
+  const affectedFiles: string[] = [];
+  for (const msg of messages.slice(turnStartIdx)) {
+    for (const filePath of msg.changed_files ?? []) {
+      if (!seen.has(filePath)) {
+        seen.add(filePath);
+        affectedFiles.push(filePath);
+      }
+    }
+  }
+  const laterTurnCount = messages
+    .slice(targetIdx + 1)
+    .filter((m) => m.role === "assistant").length;
+  return { affectedFiles, laterTurnCount };
+}
+
+function formatRevertDescription(affectedFiles: string[], laterTurnCount: number): string {
+  const laterClause =
+    laterTurnCount > 0
+      ? ` and ${laterTurnCount} later ${laterTurnCount === 1 ? "turn" : "turns"}`
+      : "";
+  if (affectedFiles.length === 0) {
+    return `Removes this turn${laterClause} from the session and places your prompt back in the composer.`;
+  }
+  const preview = affectedFiles.slice(0, 3).join(", ");
+  const moreSuffix =
+    affectedFiles.length > 3 ? ` (+${affectedFiles.length - 3} more)` : "";
+  const fileWord = affectedFiles.length === 1 ? "file" : "files";
+  return `Restores ${affectedFiles.length} workspace ${fileWord} (${preview}${moreSuffix}) to before this turn, removes this turn${laterClause} from the session, and places your prompt back in the composer.`;
+}
 
 function renderGroupedToolBlocks(
   blocks: readonly GroupedToolBlock[],
@@ -75,6 +146,8 @@ export function MessageStream() {
   const [isTopObserverArmed, setIsTopObserverArmed] = useState(false);
   const [groupOpenOverrides, setGroupOpenOverrides] = useState<Record<string, boolean>>({});
   const [liveNowMs, setLiveNowMs] = useState<number>(() => Date.now());
+  const [revertTargetId, setRevertTargetId] = useState<string | null>(null);
+  const [isRevertingTurn, setIsRevertingTurn] = useState(false);
 
   const sessionKey = state.activeSession?.id ?? "empty";
   const streamingStartedAtMs = state.streamingAssistant?.startedAtMs ?? null;
@@ -111,7 +184,27 @@ export function MessageStream() {
 
   useEffect(() => {
     setGroupOpenOverrides({});
+    setRevertTargetId(null);
+    setIsRevertingTurn(false);
   }, [sessionKey]);
+
+  const revertImpact = useMemo(
+    () => summarizeRevertImpact(state.messages, revertTargetId),
+    [state.messages, revertTargetId],
+  );
+
+  const handleConfirmRevert = useCallback(async () => {
+    if (!revertTargetId || isRevertingTurn) return;
+    setIsRevertingTurn(true);
+    try {
+      await actions.revertFromMessage(revertTargetId);
+      setRevertTargetId(null);
+    } catch {
+      // Error surfaced via state.streamError
+    } finally {
+      setIsRevertingTurn(false);
+    }
+  }, [actions, isRevertingTurn, revertTargetId]);
 
   useEffect(() => {
     if (!state.isStreaming || streamingStartedAtMs === null) {
@@ -271,62 +364,86 @@ export function MessageStream() {
   );
 
   return (
-    <ChatLayout
-      key={sessionKey}
-      ref={chatScrollRef}
-      density="balanced"
-      scrollButton={null}
-      composer={<Composer />}
-      emptyState={!hasContent ? emptyState : undefined}
-    >
-      {hasContent ? (
-        <ChatMessageList
-          isStreaming={state.isStreaming}
-          scrollToTopAction={
-            state.hasMoreMessages && isTopObserverArmed ? handleScrollToTopAction : undefined
-          }
-        >
-          {state.isLoadingOlderMessages && (
-            <HStack gap={2} hAlign="center" vAlign="center" padding={2} role="status">
-              <Spinner size="sm" shade="subtle" aria-hidden="true" />
-              <Text type="supporting" color="secondary">
-                Loading older messages...
-              </Text>
-            </HStack>
-          )}
-          {state.messages.map((msg, msgIndex) => {
-            if (msg.role === "user") {
-              return (
-                <ChatMessage key={msg.id} sender="user">
-                  <ChatMessageBubble>{msg.content}</ChatMessageBubble>
-                </ChatMessage>
-              );
+    <>
+      <ChatLayout
+        key={sessionKey}
+        ref={chatScrollRef}
+        density="balanced"
+        scrollButton={null}
+        composer={<Composer />}
+        emptyState={!hasContent ? emptyState : undefined}
+      >
+        {hasContent ? (
+          <ChatMessageList
+            isStreaming={state.isStreaming}
+            scrollToTopAction={
+              state.hasMoreMessages && isTopObserverArmed ? handleScrollToTopAction : undefined
             }
-            const toolBlocks = Array.isArray(msg.tool_calls)
-              ? groupToolCalls(msg.tool_calls, {
-                  isStreaming: false,
-                  hasAssistantTextStarted: msg.content.trim().length > 0,
-                  groupKeyPrefix: msg.id,
-                })
-              : [];
-            const durationMs = computeAssistantTurnDurationMs(
-              state.messages,
-              msgIndex,
-              state.turnDurationsMs,
-            );
-            return (
-              <ChatMessage
-                key={msg.id}
-                sender="assistant"
-                avatar={<Avatar name="Abyss" size="sm" />}
-                metadata={
-                  durationMs !== null ? (
-                    <Text type="supporting" color="secondary" hasTabularNumbers>
-                      {formatWorkedDuration(durationMs)}
-                    </Text>
-                  ) : undefined
-                }
-              >
+          >
+            {state.isLoadingOlderMessages && (
+              <HStack gap={2} hAlign="center" vAlign="center" padding={2} role="status">
+                <Spinner size="sm" shade="subtle" aria-hidden="true" />
+                <Text type="supporting" color="secondary">
+                  Loading older messages...
+                </Text>
+              </HStack>
+            )}
+            {state.messages.map((msg, msgIndex) => {
+              if (msg.role === "user") {
+                return (
+                  <ChatMessage key={msg.id} sender="user">
+                    <ChatMessageBubble>{msg.content}</ChatMessageBubble>
+                  </ChatMessage>
+                );
+              }
+              const toolBlocks = Array.isArray(msg.tool_calls)
+                ? groupToolCalls(msg.tool_calls, {
+                    isStreaming: false,
+                    hasAssistantTextStarted: msg.content.trim().length > 0,
+                    groupKeyPrefix: msg.id,
+                  })
+                : [];
+              const durationMs = computeAssistantTurnDurationMs(
+                state.messages,
+                msgIndex,
+                state.turnDurationsMs,
+              );
+              const turnChangedCount = msg.changed_files?.length ?? 0;
+              const canRevertTurn = !msg.id.startsWith("local-");
+              const verificationBadge =
+                msg.verification_stamp === "passed" ? (
+                  <Badge label="Verified" variant="green" />
+                ) : msg.verification_stamp === "failed" ? (
+                  <Badge label="Checks failed" variant="orange" />
+                ) : null;
+              return (
+                <ChatMessage
+                  key={msg.id}
+                  sender="assistant"
+                  avatar={<Avatar name="Abyss" size="sm" />}
+                  metadata={
+                    durationMs !== null || verificationBadge !== null || canRevertTurn ? (
+                      <HStack gap={2} vAlign="center" wrap="wrap">
+                        {durationMs !== null && (
+                          <Text type="supporting" color="secondary" hasTabularNumbers>
+                            {formatWorkedDuration(durationMs)}
+                          </Text>
+                        )}
+                        {verificationBadge}
+                        {canRevertTurn && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            icon={<Icon icon={ArrowUturnLeftIcon} size="sm" />}
+                            label={turnChangedCount > 0 ? `Revert (${turnChangedCount})` : "Revert"}
+                            isDisabled={state.isStreaming || isRevertingTurn}
+                            onClick={() => setRevertTargetId(msg.id)}
+                          />
+                        )}
+                      </HStack>
+                    ) : undefined
+                  }
+                >
                 {msg.thinking && (
                   <Collapsible
                     defaultIsOpen={false}
@@ -442,6 +559,25 @@ export function MessageStream() {
           <ShellApprovalCard />
         </ChatMessageList>
       ) : null}
-    </ChatLayout>
+      </ChatLayout>
+      <AlertDialog
+        isOpen={revertTargetId !== null}
+        onOpenChange={(open) => {
+          if (!open && !isRevertingTurn) {
+            setRevertTargetId(null);
+          }
+        }}
+        title="Revert to before this turn?"
+        description={formatRevertDescription(
+          revertImpact.affectedFiles,
+          revertImpact.laterTurnCount,
+        )}
+        cancelLabel="Cancel"
+        actionLabel="Revert Turn"
+        actionVariant="destructive"
+        isActionLoading={isRevertingTurn}
+        onAction={() => void handleConfirmRevert()}
+      />
+    </>
   );
 }

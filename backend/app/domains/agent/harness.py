@@ -17,6 +17,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 
+from backend.app.domains.agent.checkpoints import TurnCheckpointStore
 from backend.app.domains.agent.middleware.git_evidence import (
     GitEvidenceMiddleware,
     GitEvidenceTracker,
@@ -29,6 +30,10 @@ from backend.app.domains.agent.middleware.model_retries import ModelRetryMiddlew
 from backend.app.domains.agent.middleware.run_prompt import RunPromptMiddleware
 from backend.app.domains.agent.middleware.subdir_agents import SubdirAgentsReadMiddleware
 from backend.app.domains.agent.middleware.tool_errors import ToolErrorMiddleware
+from backend.app.domains.agent.middleware.verification import (
+    VerificationLoopMiddleware,
+    VerificationTracker,
+)
 from backend.app.domains.agent.middleware.workflow import ArtifactWorkflowMiddleware
 from backend.app.domains.agent.model_adapter import ModelFactory
 from backend.app.domains.agent.run_backends import (
@@ -87,9 +92,10 @@ class DeepAgentHarness:
         )
         self._subdir_agents_by_key: dict[tuple[str, str], SubdirAgentsReadMiddleware] = {}
         self._shell_guard = ShellGuard()
+        self._checkpoint_store = TurnCheckpointStore(config.checkpoints_root)
 
-    async def delete_thread(self, session_id: str) -> None:
-        """Delete LangGraph checkpoints and in-memory session middleware caches for a session."""
+    async def reset_thread(self, session_id: str) -> None:
+        """Reset LangGraph thread state and middleware caches while keeping file checkpoints."""
         for mw in self._subdir_agents_by_key.values():
             mw.clear_session(session_id)
         if self._checkpointer is not None and hasattr(self._checkpointer, "adelete_thread"):
@@ -99,6 +105,37 @@ class DeepAgentHarness:
                 if inspect.isawaitable(maybe_coro):
                     await maybe_coro
             await self._checkpointer.adelete_thread(session_id)
+
+    async def delete_thread(self, session_id: str) -> None:
+        """Delete LangGraph checkpoints, caches, and turn file snapshots for a session."""
+        await self.reset_thread(session_id)
+        self._checkpoint_store.delete_session_checkpoints(session_id)
+
+    async def revert_checkpoints(
+        self,
+        session_id: str,
+        workspace_path: Path,
+        checkpoint_ids_newest_first: list[str],
+    ) -> list[str]:
+        """Restore workspace files for checkpoints (newest first) and reset thread state."""
+        reverted_files = await self._checkpoint_store.revert_checkpoints(
+            session_id,
+            workspace_path,
+            checkpoint_ids_newest_first,
+        )
+        await self.reset_thread(session_id)
+        return reverted_files
+
+    async def _has_thread_checkpoint(self, session_id: str) -> bool:
+        if self._checkpointer is None or not hasattr(self._checkpointer, "aget_tuple"):
+            return False
+        setup_fn = getattr(self._checkpointer, "setup", None)
+        if callable(setup_fn):
+            maybe_coro = setup_fn()
+            if inspect.isawaitable(maybe_coro):
+                await maybe_coro
+        existing = await self._checkpointer.aget_tuple({"configurable": {"thread_id": session_id}})
+        return existing is not None
 
     def _get_or_build_graph(
         self,
@@ -149,6 +186,7 @@ class DeepAgentHarness:
                 ToolErrorMiddleware(),
                 ModelRetryMiddleware(),
                 GitEvidenceMiddleware(),
+                VerificationLoopMiddleware(),
                 artifact_mw,
             ],
             checkpointer=self._checkpointer,
@@ -198,11 +236,14 @@ class DeepAgentHarness:
         project_id: str | None = None,
     ) -> RunCatalog:
         artifacts_dir = self._artifact_store.session_dir(session_id)
-        tracker = GitEvidenceTracker(workspace_path=workspace_path)
+        resolved_ws = workspace_path.resolve()
+        tracker = GitEvidenceTracker(workspace_path=resolved_ws)
+        capture = self._checkpoint_store.new_capture(session_id, resolved_ws)
+        verify_tracker = VerificationTracker()
         return RunCatalog(
             session_id=session_id,
             project_id=project_id or "",
-            workspace_path=workspace_path.resolve(),
+            workspace_path=resolved_ws,
             mode=mode,
             artifacts_dir=artifacts_dir,
             project_memory_dir=self._project_memory_dir(project_id),
@@ -210,6 +251,8 @@ class DeepAgentHarness:
             secret_values=(creds.api_key,),
             extra_skills_dirs=(),
             git_tracker=tracker,
+            checkpoint_capture=capture,
+            verification_tracker=verify_tracker,
         )
 
     async def stream_run(
@@ -222,6 +265,7 @@ class DeepAgentHarness:
         creds: LLMCredentials,
         project_id: str | None = None,
         pinned_skills: list[str] | None = None,
+        prior_messages: list[tuple[str, str]] | None = None,
     ) -> AsyncIterator[HarnessEvent]:
         graph = self._get_or_build_graph(creds, mode)
         catalog = self._build_catalog(
@@ -231,8 +275,17 @@ class DeepAgentHarness:
             creds=creds,
             project_id=project_id,
         )
+        seed_messages: list[tuple[str, str]] = []
+        if prior_messages and not await self._has_thread_checkpoint(session_id):
+            seed_messages.extend(
+                ("user" if role == "user" else "assistant", text)
+                for role, text in prior_messages
+                if text.strip()
+            )
+        seed_messages.append(("user", user_message))
+
         run_input: dict[str, Any] = {
-            "messages": [("user", user_message)],
+            "messages": seed_messages,
             "skills_metadata": None,
             "plan_approved": False,
         }
@@ -332,6 +385,21 @@ class DeepAgentHarness:
                         "mode": catalog.mode,
                     },
                 )
+                if catalog.checkpoint_capture is not None:
+                    err_cid, err_changed = await catalog.checkpoint_capture.finalize()
+                    if err_cid is not None:
+                        yield HarnessEvent(
+                            event="turn_meta",
+                            data={
+                                "checkpoint_id": err_cid,
+                                "changed_files": err_changed,
+                                "verification_stamp": (
+                                    catalog.verification_tracker.stamp
+                                    if catalog.verification_tracker is not None
+                                    else None
+                                ),
+                            },
+                        )
                 yield HarnessEvent(
                     event="error",
                     data={"code": "AGENT_EXECUTION_ERROR", "message": safe_msg},
@@ -342,10 +410,37 @@ class DeepAgentHarness:
         for art_ev in final_art_events:
             yield art_ev
 
-        if catalog.git_tracker is not None and catalog.git_tracker.has_changes:
+        checkpoint_id: str | None = None
+        checkpoint_changed: list[str] = []
+        if catalog.checkpoint_capture is not None:
+            checkpoint_id, checkpoint_changed = await catalog.checkpoint_capture.finalize()
+
+        verification_stamp = (
+            catalog.verification_tracker.stamp
+            if catalog.verification_tracker is not None
+            else None
+        )
+        if checkpoint_id is not None or verification_stamp not in (None, "not_needed"):
+            yield HarnessEvent(
+                event="turn_meta",
+                data={
+                    "checkpoint_id": checkpoint_id,
+                    "changed_files": checkpoint_changed,
+                    "verification_stamp": verification_stamp,
+                },
+            )
+
+        git_changed = (
+            catalog.git_tracker.changed_files
+            if catalog.git_tracker is not None and catalog.git_tracker.has_changes
+            else []
+        )
+        combined_changed = sorted(set(git_changed) | set(checkpoint_changed))
+        has_git_changes = catalog.git_tracker is not None and catalog.git_tracker.has_changes
+        if combined_changed or has_git_changes:
             yield HarnessEvent(
                 event="diff_changed",
-                data={"changed_files": catalog.git_tracker.changed_files},
+                data={"changed_files": combined_changed},
             )
 
         if not interrupted:
