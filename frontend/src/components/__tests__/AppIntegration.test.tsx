@@ -641,4 +641,218 @@ describe("App + LiveWorkspaceProvider end-to-end integration", () => {
       await Promise.resolve();
     });
   });
+
+  it("queues follow-up on Enter while streaming, splits timeline on steer_applied, and auto-drains queue on IDLE completion", async () => {
+    window.localStorage.setItem(
+      SETTINGS_STORAGE_KEY,
+      JSON.stringify({
+        baseUrl: "http://127.0.0.1:8099/v1",
+        model: "qwen3.8-flash",
+        apiKey: "sk-queue-key",
+        enableThinking: true,
+      }),
+    );
+
+    const project = {
+      id: "proj-q",
+      name: "repo",
+      path: "/repo",
+      is_git_repo: true,
+      branch: "main",
+      created_at: "2026-11-23T00:00:00Z",
+      updated_at: "2026-11-23T00:00:00Z",
+    };
+    const session = {
+      id: "sess-q",
+      project_id: "proj-q",
+      title: "Queue Test",
+      workspace_path: "/repo",
+      mode: "ask" as const,
+      status: "idle" as const,
+      pending_interrupt: null,
+      created_at: "2026-11-23T00:00:00Z",
+      updated_at: "2026-11-23T00:00:00Z",
+    };
+
+    const enc = new TextEncoder();
+    let activeStreamCtrl: ReadableStreamDefaultController<Uint8Array> | null = null;
+    const streamBodies: Array<Record<string, unknown>> = [];
+    const steerBodies: Array<Record<string, unknown>> = [];
+    let storedMessages: Array<Record<string, unknown>> = [];
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/projects") return jsonResponse([project]);
+        if (url === "/api/sessions" && (!init?.method || init.method === "GET")) {
+          return jsonResponse([session]);
+        }
+        if (url.startsWith("/api/skills/installed")) return jsonResponse([]);
+        if (url.startsWith("/api/workspace/tree")) return jsonResponse([]);
+        if (url.startsWith("/api/workspace/validate") || url.startsWith("/api/workspace/default")) {
+          return jsonResponse({ path: "/repo", name: "repo", is_git_repo: true, branch: "main" });
+        }
+        if (url.startsWith("/api/workspace/diff")) {
+          return jsonResponse({ workspace_path: "/repo", branch: "main", git_head: "abc", files: [] });
+        }
+        if (url === "/api/sessions/sess-q/artifacts") {
+          return jsonResponse({ artifacts: [], walkthrough_plan: null });
+        }
+        if (url === "/api/sessions/sess-q" || url.startsWith("/api/sessions/sess-q?")) {
+          return jsonResponse({ session, messages: storedMessages, has_more_messages: false });
+        }
+        if (url === "/api/sessions/sess-q/steer") {
+          const parsed = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+          steerBodies.push(parsed);
+          return jsonResponse({ accepted: true, steer_id: "st-1", session_id: "sess-q" }, 202);
+        }
+        if (url === "/api/sessions/sess-q/messages/stream") {
+          const parsed = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+          streamBodies.push(parsed);
+          if (streamBodies.length === 1) {
+            const stream = new ReadableStream<Uint8Array>({
+              start(ctrl) {
+                activeStreamCtrl = ctrl;
+                ctrl.enqueue(enc.encode('event: token\ndata: {"text":"Working on part 1..."}\n\n'));
+              },
+            });
+            return new Response(stream, { status: 200 });
+          }
+          // Second stream (auto-drained from queue!)
+          storedMessages = [
+            ...storedMessages,
+            {
+              id: "u-auto-2",
+              session_id: "sess-q",
+              role: "user",
+              content: "Run tests next",
+              thinking: "",
+              tool_calls: [],
+              created_at: "2026-11-23T00:00:05Z",
+            },
+            {
+              id: "a-auto-2",
+              session_id: "sess-q",
+              role: "assistant",
+              content: "Auto-drained turn finished!",
+              thinking: "",
+              tool_calls: [],
+              created_at: "2026-11-23T00:00:06Z",
+            },
+          ];
+          const secondSse =
+            'event: token\ndata: {"text":"Auto-drained turn finished!"}\n\nevent: done\ndata: {"session_id":"sess-q"}\n\n';
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(ctrl) {
+                ctrl.enqueue(enc.encode(secondSse));
+                ctrl.close();
+              },
+            }),
+            { status: 200 },
+          );
+        }
+        return jsonResponse({});
+      }),
+    );
+
+    render(
+      <Theme theme={themes[defaultThemeSlug]}>
+        <App />
+      </Theme>,
+    );
+
+    await screen.findAllByText("Queue Test");
+    const textbox = screen.getByRole("textbox", { name: "Message input" });
+    textbox.textContent = "Analyze app.py";
+    fireEvent.input(textbox);
+    fireEvent.keyDown(textbox, { key: "Enter", code: "Enter" });
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("Working on part 1...");
+    });
+
+    // Queue two prompts while stream #1 is still running:
+    textbox.textContent = "Check auth.py immediately";
+    fireEvent.input(textbox);
+    fireEvent.keyDown(textbox, { key: "Enter", code: "Enter" });
+
+    textbox.textContent = "Run tests next";
+    fireEvent.input(textbox);
+    fireEvent.keyDown(textbox, { key: "Enter", code: "Enter" });
+
+    await screen.findByText("Queued (2)");
+
+    // Click Steer on item #1 -> sends /steer and leaves item #2 in Queue!
+    const steerBtns = screen.getAllByRole("button", { name: "Steer" });
+    await act(async () => {
+      fireEvent.click(steerBtns[0]);
+    });
+    expect(steerBodies).toHaveLength(1);
+    expect(steerBodies[0].content).toBe("Check auth.py immediately");
+    expect(screen.getByText("Queued (1)")).toBeInTheDocument();
+
+    // Server emits steer_applied -> splits live timeline!
+    const steerEventPayload = {
+      flushed_assistant: {
+        id: "a-seg-1",
+        session_id: "sess-q",
+        role: "assistant",
+        content: "Working on part 1...",
+        thinking: "",
+        tool_calls: [],
+        created_at: "2026-11-23T00:00:02Z",
+      },
+      user_messages: [
+        {
+          id: "u-steer-1",
+          session_id: "sess-q",
+          role: "user",
+          content: "Check auth.py immediately",
+          thinking: "",
+          tool_calls: [],
+          created_at: "2026-11-23T00:00:03Z",
+        },
+      ],
+    };
+    storedMessages = [
+      {
+        id: "u-1",
+        session_id: "sess-q",
+        role: "user",
+        content: "Analyze app.py",
+        thinking: "",
+        tool_calls: [],
+        created_at: "2026-11-23T00:00:01Z",
+      },
+      steerEventPayload.flushed_assistant,
+      steerEventPayload.user_messages[0],
+      {
+        id: "a-seg-2",
+        session_id: "sess-q",
+        role: "assistant",
+        content: "Checked auth.py too!",
+        thinking: "",
+        tool_calls: [],
+        created_at: "2026-11-23T00:00:04Z",
+      },
+    ];
+
+    await act(async () => {
+      activeStreamCtrl?.enqueue(
+        enc.encode(`event: steer_applied\ndata: ${JSON.stringify(steerEventPayload)}\n\n`),
+      );
+      activeStreamCtrl?.enqueue(enc.encode('event: token\ndata: {"text":"Checked auth.py too!"}\n\n'));
+      activeStreamCtrl?.enqueue(enc.encode('event: done\ndata: {"session_id":"sess-q"}\n\n'));
+      activeStreamCtrl?.close();
+    });
+
+    // After stream #1 finishes IDLE, queued item #2 ("Run tests next") MUST auto-drain!
+    await waitFor(() => {
+      expect(streamBodies).toHaveLength(2);
+      expect(streamBodies[1].content).toBe("Run tests next");
+    });
+    await screen.findByText("Auto-drained turn finished!");
+  });
 });

@@ -115,3 +115,9 @@ class RevertSessionResult(BaseModel):
     has_more_messages: bool = False
     reverted_files: list[str] = Field(default_factory=list)
     rewound_user_prompt: str | None = None
+
+
+class SteerSessionResult(BaseModel):
+    accepted: bool = True
+    steer_id: str
+    session_id: str

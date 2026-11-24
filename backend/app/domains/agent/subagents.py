@@ -5,6 +5,7 @@ from __future__ import annotations
 from deepagents.middleware.subagents import SubAgent
 from langchain_core.language_models.chat_models import BaseChatModel
 
+from backend.app.domains.agent.middleware.language_guard import LanguageGuardMiddleware
 from backend.app.domains.agent.middleware.model_retries import ModelRetryMiddleware
 from backend.app.domains.agent.middleware.read_only_guard import ReadOnlyToolGuardMiddleware
 from backend.app.domains.agent.middleware.subdir_agents import SubdirAgentsReadMiddleware
@@ -13,10 +14,11 @@ from backend.app.domains.agent.middleware.tool_errors import ToolErrorMiddleware
 _EXPLORER_PROMPT = (
     "You are a fast read-only codebase explorer.\n"
     "Map directory structure, entrypoints, dependencies, and control flow using "
-    "`ls`, `glob`, `grep`, and `read_file` in parallel.\n"
+    "`ls`, `glob`, `grep` (literal fixed-string search, NOT regex), and `read_file` in parallel.\n"
     "Cite exact file paths and symbol names. Do not fabricate anything you did not read.\n"
     "Write user-facing summaries in Korean (한국어) by default while preserving file paths, "
-    "symbol names, and code verbatim."
+    "symbol names, and code verbatim. NEVER output Chinese characters (CJK Han) in reasoning, "
+    "`grep` patterns, or summaries unless quoting existing repository content."
 )
 
 _REVIEWER_PROMPT = (
@@ -26,11 +28,12 @@ _REVIEWER_PROMPT = (
     "weaken checks.\n"
     "2. Inspect modified files for correctness bugs, edge cases, schema backwards-compatibility, "
     "path confinement, secret leaks, typing errors, and DDD boundary violations using `ls`, "
-    "`glob`, `grep`, and `read_file`.\n"
+    "`glob`, `grep` (literal fixed-string search), and `read_file`.\n"
     "3. Tag every finding strictly as `[Important]`, `[Nit]`, or `[Pre-existing]` so must-fix "
     "regressions are separated from minor polish and pre-existing behavior.\n"
     "4. Return concise, actionable findings in Korean (한국어) by default with exact file paths "
-    "and line references."
+    "and line references. NEVER output Chinese characters (CJK Han) in reasoning or findings "
+    "unless quoting existing repository content."
 )
 
 
@@ -42,6 +45,7 @@ def build_subagents(
     """Build mode-appropriate read-only subagent specs with zero HITL conflict."""
     shared_middleware = [
         ReadOnlyToolGuardMiddleware(),
+        LanguageGuardMiddleware(),
         SubdirAgentsReadMiddleware(),
         ToolErrorMiddleware(),
         ModelRetryMiddleware(),

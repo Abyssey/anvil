@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
@@ -156,8 +157,9 @@ export function ProjectMemoryDialog() {
       : undefined;
 
   return (
-    <Dialog
-      isOpen={state.memoryOpen}
+    <>
+      <Dialog
+        isOpen={state.memoryOpen}
       onOpenChange={(open) => {
         if (!open) actions.closeMemory();
       }}
@@ -215,27 +217,9 @@ export function ProjectMemoryDialog() {
             </VStack>
           </LayoutContent>
         }
-        footer={
-          <LayoutFooter hasDivider>
-            <HStack hAlign="between" vAlign="center" width="100%" gap={2}>
-              {confirmClear ? (
-                <HStack gap={1.5} vAlign="center">
-                  <Button
-                    label="Confirm Clear"
-                    variant="destructive"
-                    size="sm"
-                    isLoading={isClearing}
-                    onClick={() => void handleConfirmClear()}
-                  />
-                  <Button
-                    label="Cancel"
-                    variant="ghost"
-                    size="sm"
-                    isDisabled={isClearing}
-                    onClick={() => setConfirmClear(false)}
-                  />
-                </HStack>
-              ) : (
+          footer={
+            <LayoutFooter hasDivider>
+              <HStack hAlign="between" vAlign="center" width="100%" gap={2}>
                 <Button
                   label="Clear Memory"
                   variant="ghost"
@@ -243,22 +227,38 @@ export function ProjectMemoryDialog() {
                   isDisabled={!projectId || isLoading || (!draft && !memory?.content)}
                   onClick={() => setConfirmClear(true)}
                 />
-              )}
 
-              <HStack gap={2} vAlign="center">
-                <Button label="Close" variant="secondary" onClick={actions.closeMemory} />
-                <Button
-                  label="Save"
-                  variant="primary"
-                  isLoading={isSaving}
-                  isDisabled={!projectId || isLoading || isOverBytes || !isDirty}
-                  onClick={() => void handleSave()}
-                />
+                <HStack gap={2} vAlign="center">
+                  <Button label="Close" variant="secondary" onClick={actions.closeMemory} />
+                  <Button
+                    label="Save"
+                    variant="primary"
+                    isLoading={isSaving}
+                    isDisabled={!projectId || isLoading || isOverBytes || !isDirty}
+                    onClick={() => void handleSave()}
+                  />
+                </HStack>
               </HStack>
-            </HStack>
-          </LayoutFooter>
-        }
+            </LayoutFooter>
+          }
+        />
+      </Dialog>
+
+      <AlertDialog
+        isOpen={confirmClear}
+        onOpenChange={(open) => {
+          if (!open && !isClearing) {
+            setConfirmClear(false);
+          }
+        }}
+        title={`Clear project memory for "${projectName}"?`}
+        description="This permanently clears /memories/project/AGENTS.md for this project. Your repository AGENTS.md file on disk will not be modified."
+        cancelLabel="Cancel"
+        actionLabel="Clear Memory"
+        actionVariant="destructive"
+        isActionLoading={isClearing}
+        onAction={() => void handleConfirmClear()}
       />
-    </Dialog>
+    </>
   );
 }

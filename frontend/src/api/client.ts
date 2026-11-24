@@ -18,6 +18,7 @@ import type {
   SkillInstallRequest,
   SkillPreview,
   SkillScope,
+  SteerSessionResponse,
   StreamEvent,
   TreeNode,
   WorkspaceDiff,
@@ -82,6 +83,14 @@ export const apiClient = {
   browseDirectories(path?: string): Promise<DirectoryBrowseResponse> {
     const qs = path ? `?path=${encodeURIComponent(path)}` : "";
     return fetchJson(`/api/workspace/browse${qs}`);
+  },
+
+  createDirectory(parentPath: string, name: string): Promise<WorkspaceInfo> {
+    return fetchJson("/api/workspace/mkdir", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ parent_path: parentPath, name }),
+    });
   },
 
   listProjects(): Promise<Project[]> {
@@ -278,6 +287,20 @@ export const apiClient = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message_id: messageId }),
+    });
+  },
+
+  steerSession(
+    sessionId: string,
+    body: { content: string; pinned_skills?: string[] },
+  ): Promise<SteerSessionResponse> {
+    return fetchJson(`/api/sessions/${encodeURIComponent(sessionId)}/steer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        content: body.content,
+        pinned_skills: body.pinned_skills ?? [],
+      }),
     });
   },
 

@@ -17,6 +17,7 @@ import type {
   PendingInterrupt,
   Project,
   QuestionAnswer,
+  QueuedPrompt,
   RunMode,
   Session,
   StreamEvent,
@@ -74,6 +75,8 @@ export interface WorkspaceState {
   streamError: string | null;
   treeRevision: number;
   rewoundDraft?: { text: string; seq: number } | null;
+  queuedMessages?: QueuedPrompt[];
+  isQueuePaused?: boolean;
 }
 
 export type ResumeDecision = "approve" | "revise" | "deny" | "answer" | "skip";
@@ -102,6 +105,12 @@ export interface WorkspaceActions {
   setWorkspacePath: (path: string) => Promise<void>;
   setMode: (mode: RunMode) => Promise<void>;
   sendMessage: (content: string) => Promise<void>;
+  enqueueMessage?: (content: string) => Promise<void>;
+  steerMessage?: (content: string, explicitPinnedSkills?: string[]) => Promise<void>;
+  steerQueuedMessage?: (queueId: string) => Promise<void>;
+  sendQueuedMessageNow?: (queueId: string) => Promise<void>;
+  editQueuedMessage?: (queueId: string) => void;
+  removeQueuedMessage?: (queueId: string) => void;
   loadOlderMessages: () => Promise<void>;
   stopStream: () => void;
   resumeInterrupt: (
@@ -262,24 +271,51 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
   const [streamError, setStreamError] = useState<string | null>(null);
   const [treeRevision, setTreeRevision] = useState(0);
   const [rewoundDraft, setRewoundDraft] = useState<{ text: string; seq: number } | null>(null);
+  const [queuedBySession, setQueuedBySession] = useState<Record<string, QueuedPrompt[]>>({});
+  const [queuePausedBySession, setQueuePausedBySession] = useState<Record<string, boolean>>({});
 
   const abortRef = useRef<AbortController | null>(null);
+  const manualStopRef = useRef(false);
   const loadingOlderRef = useRef(false);
   const loadSeqRef = useRef(0);
   const skillsSeqRef = useRef(0);
   const activeSessionRef = useRef<Session | null>(null);
+  const isStreamingRef = useRef(false);
   const messagesRef = useRef<ChatMessage[]>([]);
   const hasMoreMessagesRef = useRef(false);
   const workspacePathRef = useRef(workspacePath);
   const installedSkillsRef = useRef<InstalledSkill[]>([]);
   const pinnedSkillsRef = useRef<string[]>([]);
+  const queuedBySessionRef = useRef<Record<string, QueuedPrompt[]>>({});
+  const queuePausedRef = useRef<Record<string, boolean>>({});
+  const dispatchQueuedTurnRef = useRef<
+    ((session: Session, rawContent: string, explicitPins?: string[]) => Promise<void>) | null
+  >(null);
 
   activeSessionRef.current = activeSession;
+  isStreamingRef.current = isStreaming;
   messagesRef.current = messages;
   hasMoreMessagesRef.current = hasMoreMessages;
   workspacePathRef.current = workspacePath;
   installedSkillsRef.current = installedSkills;
   pinnedSkillsRef.current = pinnedSkills;
+  queuedBySessionRef.current = queuedBySession;
+  queuePausedRef.current = queuePausedBySession;
+
+  const updateSessionQueue = useCallback(
+    (sessionId: string, updater: (prev: QueuedPrompt[]) => QueuedPrompt[]) => {
+      const current = queuedBySessionRef.current[sessionId] ?? [];
+      const next = updater(current);
+      queuedBySessionRef.current = { ...queuedBySessionRef.current, [sessionId]: next };
+      setQueuedBySession((prev) => ({ ...prev, [sessionId]: next }));
+    },
+    [],
+  );
+
+  const setSessionQueuePaused = useCallback((sessionId: string, paused: boolean) => {
+    queuePausedRef.current = { ...queuePausedRef.current, [sessionId]: paused };
+    setQueuePausedBySession((prev) => ({ ...prev, [sessionId]: paused }));
+  }, []);
 
   const resetActiveSessionView = useCallback(() => {
     abortRef.current?.abort();
@@ -681,13 +717,19 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
     async (url: string, body: Record<string, unknown>, targetSessionId: string, wsPath: string) => {
       const controller = new AbortController();
       abortRef.current = controller;
+      manualStopRef.current = false;
       const startedAtMs = Date.now();
+      let segmentStartedAtMs = startedAtMs;
+      let sawInterrupt = false;
+      let sawError = false;
+      let wasAborted = false;
       const toolStartedAt = new Map<string, number>();
       const existingMessageIds = new Set(
         messagesRef.current
           .filter((m) => m.session_id === targetSessionId && !m.id.startsWith("local-"))
           .map((m) => m.id),
       );
+      isStreamingRef.current = true;
       setIsStreaming(true);
       setStreamError(null);
       setStreamingAssistant({
@@ -775,12 +817,52 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
                   }
                 : prev,
             );
+          } else if (ev.event === "steer_applied") {
+            const segElapsed = Math.max(0, Date.now() - segmentStartedAtMs);
+            segmentStartedAtMs = Date.now();
+            toolStartedAt.clear();
+            const rawFlushed = ev.data.flushed_assistant;
+            const flushed =
+              typeof rawFlushed === "object" && rawFlushed !== null
+                ? (rawFlushed as unknown as ChatMessage)
+                : null;
+            const rawUsers = Array.isArray(ev.data.user_messages)
+              ? (ev.data.user_messages as unknown as ChatMessage[])
+              : [];
+            if (flushed?.id) {
+              existingMessageIds.add(flushed.id);
+              setTurnDurationsMs((prev) => ({
+                ...prev,
+                [flushed.id]: segElapsed,
+              }));
+            }
+            for (const u of rawUsers) {
+              if (u?.id) {
+                existingMessageIds.add(u.id);
+              }
+            }
+            if (flushed || rawUsers.length > 0) {
+              setMessages((prev) => [
+                ...prev,
+                ...(flushed ? [flushed] : []),
+                ...rawUsers,
+              ]);
+            }
+            setStreamingAssistant({
+              content: "",
+              thinking: "",
+              toolCalls: [],
+              startedAtMs: segmentStartedAtMs,
+              textSplitAfterIndices: [],
+              hasTrailingAssistantText: false,
+            });
           } else if (ev.event === "artifact_updated") {
             const doc = ev.data as unknown as ArtifactDoc;
             setArtifacts((prev) => upsertArtifactDoc(prev, doc));
             setActiveArtifactTab(doc.kind);
             setRightDrawerTab("artifacts");
           } else if (ev.event === "interrupt") {
+            sawInterrupt = true;
             const pending = ev.data as unknown as PendingInterrupt;
             setActiveSession((prev) => {
               if (!prev || prev.id !== targetSessionId) return prev;
@@ -799,21 +881,30 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
           } else if (ev.event === "diff_changed") {
             setTreeRevision((n) => n + 1);
           } else if (ev.event === "error") {
+            sawError = true;
+            setSessionQueuePaused(targetSessionId, true);
             setStreamError(String(ev.data.message ?? "Agent execution error"));
           }
         });
       } catch (err) {
         if (activeSessionRef.current?.id !== targetSessionId) return;
         if (err instanceof ApiError && err.code === "LLM_SETTINGS_REQUIRED") {
+          sawError = true;
+          setSessionQueuePaused(targetSessionId, true);
           setSettingsOpen(true);
           setStreamError(err.message);
         } else if (err instanceof DOMException && err.name === "AbortError") {
-          // User stopped stream manually or switched session/project
+          wasAborted = true;
+          if (manualStopRef.current) {
+            setSessionQueuePaused(targetSessionId, true);
+          }
         } else {
+          sawError = true;
+          setSessionQueuePaused(targetSessionId, true);
           setStreamError(err instanceof Error ? err.message : "Streaming error");
         }
       } finally {
-        const elapsedMs = Math.max(0, Date.now() - startedAtMs);
+        const elapsedMs = Math.max(0, Date.now() - segmentStartedAtMs);
         if (abortRef.current === controller) {
           abortRef.current = null;
         }
@@ -821,6 +912,7 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
           void apiClient.listSessions().then(setSessions).catch(() => undefined);
           return;
         }
+        isStreamingRef.current = false;
         setIsStreaming(false);
         setStreamingAssistant(null);
         setTreeRevision((n) => n + 1);
@@ -870,41 +962,45 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
         if (diffData) {
           setDiff(diffData);
         }
+        if (
+          !wasAborted &&
+          !sawError &&
+          !sawInterrupt &&
+          detail?.session.status === "idle" &&
+          !queuePausedRef.current[targetSessionId]
+        ) {
+          const pendingQueue = queuedBySessionRef.current[targetSessionId] ?? [];
+          if (pendingQueue.length > 0) {
+            const nextItem = pendingQueue[0];
+            updateSessionQueue(targetSessionId, (prev) => prev.slice(1));
+            void dispatchQueuedTurnRef.current?.(
+              detail.session,
+              nextItem.content,
+              nextItem.pinnedSkills,
+            );
+          }
+        }
       }
     },
-    [settings],
+    [settings, setSessionQueuePaused, updateSessionQueue],
   );
 
-  const sendMessage = useCallback(
-    async (content: string) => {
-      const trimmed = content.trim();
-      if (!trimmed || isStreaming) return;
+  const dispatchTurnForSession = useCallback(
+    async (targetSession: Session, rawContent: string, explicitPinnedSkills?: string[]) => {
+      const trimmed = rawContent.trim();
+      if (!trimmed || isStreamingRef.current) return;
       if (!isLLMConfigured(settings)) {
         setSettingsOpen(true);
         setStreamError("Configure Endpoint URL, Model ID, and API Key in Settings.");
         return;
       }
-      let targetSession = activeSession;
-      if (!targetSession) {
-        const targetProj = projects.find((p) => p.id === activeProjectId) ?? projects[0];
-        targetSession = await apiClient.createSession(
-          targetProj?.path ?? (workspacePath || undefined),
-          mode,
-          targetProj?.id,
-        );
-        activeSessionRef.current = targetSession;
-        setActiveSession(targetSession);
-        setSessions((prev) => [targetSession as Session, ...prev]);
-      }
-
       const { cleanedContent, mentionedSkills } = parseLeadingSkillMentions(
         trimmed,
         installedSkillsRef.current,
       );
-      const effectivePinnedSkills = Array.from(
-        new Set([...pinnedSkillsRef.current, ...mentionedSkills]),
-      );
-      if (pinnedSkillsRef.current.length > 0) {
+      const basePins = explicitPinnedSkills ?? pinnedSkillsRef.current;
+      const effectivePinnedSkills = Array.from(new Set([...basePins, ...mentionedSkills]));
+      if (explicitPinnedSkills === undefined && pinnedSkillsRef.current.length > 0) {
         setPinnedSkills([]);
       }
 
@@ -929,7 +1025,151 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
         targetSession.workspace_path,
       );
     },
-    [isStreaming, settings, activeSession, projects, activeProjectId, workspacePath, mode, runSSEStream],
+    [settings, mode, runSSEStream],
+  );
+  dispatchQueuedTurnRef.current = dispatchTurnForSession;
+
+  const sendMessage = useCallback(
+    async (content: string, explicitPinnedSkills?: string[]) => {
+      const trimmed = content.trim();
+      if (!trimmed || isStreamingRef.current) return;
+      if (!isLLMConfigured(settings)) {
+        setSettingsOpen(true);
+        setStreamError("Configure Endpoint URL, Model ID, and API Key in Settings.");
+        return;
+      }
+      let targetSession = activeSessionRef.current;
+      if (!targetSession) {
+        const targetProj = projects.find((p) => p.id === activeProjectId) ?? projects[0];
+        targetSession = await apiClient.createSession(
+          targetProj?.path ?? (workspacePath || undefined),
+          mode,
+          targetProj?.id,
+        );
+        activeSessionRef.current = targetSession;
+        setActiveSession(targetSession);
+        setSessions((prev) => [targetSession as Session, ...prev]);
+      }
+      await dispatchTurnForSession(targetSession, trimmed, explicitPinnedSkills);
+    },
+    [settings, projects, activeProjectId, workspacePath, mode, dispatchTurnForSession],
+  );
+
+  const enqueueMessage = useCallback(
+    async (content: string) => {
+      const trimmed = content.trim();
+      if (!trimmed) return;
+      const currentSession = activeSessionRef.current;
+      if (!isStreamingRef.current || !currentSession) {
+        await sendMessage(trimmed);
+        return;
+      }
+      const { mentionedSkills } = parseLeadingSkillMentions(
+        trimmed,
+        installedSkillsRef.current,
+      );
+      const capturedPins = Array.from(
+        new Set([...pinnedSkillsRef.current, ...mentionedSkills]),
+      );
+      if (pinnedSkillsRef.current.length > 0) {
+        setPinnedSkills([]);
+      }
+      const item: QueuedPrompt = {
+        id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        content: trimmed,
+        pinnedSkills: capturedPins,
+        createdAt: new Date().toISOString(),
+      };
+      setSessionQueuePaused(currentSession.id, false);
+      updateSessionQueue(currentSession.id, (prev) => [...prev, item]);
+    },
+    [sendMessage, setSessionQueuePaused, updateSessionQueue],
+  );
+
+  const steerMessage = useCallback(
+    async (content: string, explicitPinnedSkills?: string[]) => {
+      const trimmed = content.trim();
+      if (!trimmed) return;
+      const currentSession = activeSessionRef.current;
+      const { cleanedContent, mentionedSkills } = parseLeadingSkillMentions(
+        trimmed,
+        installedSkillsRef.current,
+      );
+      const basePins = explicitPinnedSkills ?? pinnedSkillsRef.current;
+      const effectivePins = Array.from(new Set([...basePins, ...mentionedSkills]));
+      if (explicitPinnedSkills === undefined && pinnedSkillsRef.current.length > 0) {
+        setPinnedSkills([]);
+      }
+      if (!currentSession || !isStreamingRef.current) {
+        await sendMessage(trimmed, effectivePins);
+        return;
+      }
+      try {
+        await apiClient.steerSession(currentSession.id, {
+          content: cleanedContent,
+          pinned_skills: effectivePins,
+        });
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 409) {
+          await sendMessage(trimmed, effectivePins);
+          return;
+        }
+        setStreamError(err instanceof Error ? err.message : "Failed to steer active session");
+      }
+    },
+    [sendMessage],
+  );
+
+  const steerQueuedMessage = useCallback(
+    async (queueId: string) => {
+      const currentSession = activeSessionRef.current;
+      if (!currentSession) return;
+      const list = queuedBySessionRef.current[currentSession.id] ?? [];
+      const target = list.find((item) => item.id === queueId);
+      if (!target) return;
+      updateSessionQueue(currentSession.id, (prev) => prev.filter((item) => item.id !== queueId));
+      await steerMessage(target.content, target.pinnedSkills);
+    },
+    [steerMessage, updateSessionQueue],
+  );
+
+  const sendQueuedMessageNow = useCallback(
+    async (queueId: string) => {
+      const currentSession = activeSessionRef.current;
+      if (!currentSession || isStreamingRef.current) return;
+      const list = queuedBySessionRef.current[currentSession.id] ?? [];
+      const target = list.find((item) => item.id === queueId);
+      if (!target) return;
+      updateSessionQueue(currentSession.id, (prev) => prev.filter((item) => item.id !== queueId));
+      setSessionQueuePaused(currentSession.id, false);
+      await dispatchTurnForSession(currentSession, target.content, target.pinnedSkills);
+    },
+    [dispatchTurnForSession, setSessionQueuePaused, updateSessionQueue],
+  );
+
+  const editQueuedMessage = useCallback(
+    (queueId: string) => {
+      const currentSession = activeSessionRef.current;
+      if (!currentSession) return;
+      const list = queuedBySessionRef.current[currentSession.id] ?? [];
+      const target = list.find((item) => item.id === queueId);
+      if (!target) return;
+      updateSessionQueue(currentSession.id, (prev) => prev.filter((item) => item.id !== queueId));
+      if (target.pinnedSkills.length > 0) {
+        setPinnedSkills((prev) => Array.from(new Set([...prev, ...target.pinnedSkills])));
+      }
+      setRewoundDraft({ text: target.content, seq: Date.now() });
+    },
+    [updateSessionQueue],
+  );
+
+  const removeQueuedMessage = useCallback(
+    (queueId: string) => {
+      const currentSession = activeSessionRef.current;
+      if (!currentSession) return;
+      updateSessionQueue(currentSession.id, (prev) => prev.filter((item) => item.id !== queueId));
+    },
+    [updateSessionQueue],
   );
 
   const loadOlderMessages = useCallback(async () => {
@@ -971,8 +1211,13 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const stopStream = useCallback(() => {
+    const sid = activeSessionRef.current?.id;
+    if (sid) {
+      setSessionQueuePaused(sid, true);
+    }
+    manualStopRef.current = true;
     abortRef.current?.abort();
-  }, []);
+  }, [setSessionQueuePaused]);
 
   const resumeInterrupt = useCallback(
     async (
@@ -1133,6 +1378,9 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
     [activeSession, workspacePath, refreshDiff],
   );
 
+  const activeQueuedMessages = activeSession ? (queuedBySession[activeSession.id] ?? []) : [];
+  const activeQueuePaused = activeSession ? Boolean(queuePausedBySession[activeSession.id]) : false;
+
   const value: WorkspaceContextValue = {
     state: {
       settings,
@@ -1164,6 +1412,8 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
       streamError,
       treeRevision,
       rewoundDraft,
+      queuedMessages: activeQueuedMessages,
+      isQueuePaused: activeQueuePaused,
     },
     actions: {
       openSettings,
@@ -1189,6 +1439,12 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
       setWorkspacePath,
       setMode,
       sendMessage,
+      enqueueMessage,
+      steerMessage,
+      steerQueuedMessage,
+      sendQueuedMessageNow,
+      editQueuedMessage,
+      removeQueuedMessage,
       loadOlderMessages,
       stopStream,
       resumeInterrupt,

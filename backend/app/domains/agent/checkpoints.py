@@ -139,6 +139,22 @@ class CheckpointCapture:
         self._finalized = True
         return cid, changed
 
+    async def rotate_segment(self) -> tuple[str | None, list[str]]:
+        """Seal mutations up to a mid-run steer boundary and re-baseline for the next segment."""
+        was_captured = self._captured
+        cid, changed = await self.finalize()
+        self._baseline_hashes = {}
+        self._baseline_stats = {}
+        self._baseline_started_ns = 0
+        self._extra_pre_write = {}
+        self._captured = False
+        self._finalized = False
+        self.checkpoint_id = None
+        self.changed_files = []
+        if was_captured:
+            await self.capture_baseline()
+        return cid, changed
+
 
 class TurnCheckpointStore:
     """Persists content-addressed pre-turn snapshots and restores workspace state on revert."""

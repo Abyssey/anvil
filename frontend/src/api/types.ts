@@ -262,3 +262,16 @@ export interface StreamEvent {
   event: string;
   data: Record<string, unknown>;
 }
+
+export interface QueuedPrompt {
+  id: string;
+  content: string;
+  pinnedSkills: string[];
+  createdAt: string;
+}
+
+export interface SteerSessionResponse {
+  accepted: boolean;
+  steer_id: string;
+  session_id: string;
+}

@@ -37,7 +37,7 @@ flowchart TD
 
 ### 아키텍처 경계 불변 규칙 (`tests/test_architecture_boundaries.py`)
 
-- **순수 표준 라이브러리 모듈**: `domains/agent/shell_guard.py`, `domains/artifacts/walkthrough_diff.py`, `shared/logging.py`는 외부 패키지 없이 Python 표준 라이브러리만 사용합니다.
+- **순수 표준 라이브러리 모듈**: `domains/agent/cjk_guard.py`, `domains/agent/shell_guard.py`, `domains/artifacts/walkthrough_diff.py`, `shared/logging.py`는 외부 패키지 없이 Python 표준 라이브러리만 사용합니다.
 - **순수 엔티티**: 각 도메인의 `entities.py`는 표준 라이브러리와 `pydantic`만 허용합니다.
 - **도메인 간 격리**:
   - `agent` 도메인(`router.py` 제외)은 `sessions`나 `fastapi`/`starlette`를 참조하지 않습니다.
@@ -76,14 +76,16 @@ flowchart TD
 모델 호출과 도구 실행은 `DeepAgentHarness`에 등록된 아래 미들웨어 체인을 순서대로 통과합니다.
 
 1. **`TodoListMiddleware`** *(LangChain 제공)* — `write_todos` 작업 체크리스트 상태 관리
-2. **`RunPromptMiddleware`** *(직접 구현, `run_prompt.py`)* — Prompt Prefix Cache 적중률을 유지하도록 정적 기본 지침 → 모드 정책 → 프로젝트 메모리 → 세션 경로 순으로 시스템 프롬프트 조립
-3. **`DynamicMemoryMiddleware`** *(확장 구현, `memory.py`)* — 매 턴 시작 시 루트 `/AGENTS.md`와 프로젝트 메모리 `/memories/project/AGENTS.md`를 디스크에서 재로드
-4. **`SubdirAgentsReadMiddleware`** *(직접 구현, `subdir_agents.py`)* — 하위 디렉터리 파일을 처음 읽을 때 상위 경로의 로컬 `AGENTS.md` 규칙을 `ToolMessage`에 지연 주입
-5. **`ToolErrorMiddleware`** *(직접 구현, `resilience.py`)* — 일반 도구 실행 오류는 모델 자가 교정용 `ToolMessage`로 감싸 반환하되, LangGraph `GraphBubbleUp`(`interrupt`)과 `CancelledError`는 삼키지 않고 즉시 전파
-6. **`ModelRetryMiddleware`** *(직접 구현, `resilience.py`)* — 일시적 네트워크·엔드포인트 오류 지수 백오프 재시도
-7. **`GitEvidenceMiddleware`** *(직접 구현, `git_evidence.py`)* — 턴 시작 전 베이스라인 파일 스냅샷(`TurnCheckpointStore`) 캡처 및 수정 직후 단일 프로세스(`git status --porcelain=v2 --branch -z`)로 Git 변경분 갱신
-8. **`VerificationLoopMiddleware`** *(직접 구현, `verification.py`)* — 코드 수정 대비 검증 명령(`pytest`, `ruff`, `npm test` 등) 종료 코드 추적, 연속 3회 실패 시 Three-Strike 중단 가이드 주입, 수정 재발생 시 기존 통과 스탬프 무효화
-9. **`ArtifactWorkflowMiddleware`** *(직접 구현, `workflow.py`)* — 승인 전 `Plan` 모드의 수정·셸 차단, 검증 기준 파일(`ShellGuard.is_verifier_rule_path`) 자기수정 승인 게이트, `plan_review` · `shell_approval` HITL 인터럽트 조율
+2. **`SteeringQueueMiddleware`** *(직접 구현, `steering.py`)* — 실행 중 `POST /api/sessions/{id}/steer`로 적재된 사용자 개입 메시지를 다음 모델 호출 직전(`abefore_model`)에 주입
+3. **`RunPromptMiddleware`** *(직접 구현, `run_prompt.py`)* — Prompt Prefix Cache 적중률을 유지하도록 정적 기본 지침 → 모드 정책 → 프로젝트 메모리 → 세션 경로 순으로 시스템 프롬프트 조립
+4. **`DynamicMemoryMiddleware`** *(확장 구현, `memory.py`)* — 매 턴 시작 시 루트 `/AGENTS.md`와 프로젝트 메모리 `/memories/project/AGENTS.md`를 디스크에서 재로드
+5. **`SubdirAgentsReadMiddleware`** *(직접 구현, `subdir_agents.py`)* — 하위 디렉터리 파일을 처음 읽을 때 상위 경로의 로컬 `AGENTS.md` 규칙을 `ToolMessage`에 지연 주입
+6. **`LanguageGuardMiddleware`** *(직접 구현, `language_guard.py`)* — 다국어 프리트레이닝 모델의 비허용 중국어 한자(`CJK Han`) 누출 및 잘못된 `\uXXXX` `grep`/`sed` 정규식을 도구 실행 전에 차단하고 이전 턴 응답 이력을 정화해 연쇄 오염 방지
+7. **`ToolErrorMiddleware`** *(직접 구현, `tool_errors.py`)* — 일반 도구 실행 오류는 모델 자가 교정용 `ToolMessage`로 감싸 반환하되, LangGraph `GraphBubbleUp`(`interrupt`)과 `CancelledError`는 삼키지 않고 즉시 전파
+8. **`ModelRetryMiddleware`** *(직접 구현, `model_retries.py`)* — 일시적 네트워크·엔드포인트 오류 지수 백오프 재시도
+9. **`GitEvidenceMiddleware`** *(직접 구현, `git_evidence.py`)* — 턴 시작 전 베이스라인 파일 스냅샷(`TurnCheckpointStore`) 캡처 및 수정 직후 단일 프로세스(`git status --porcelain=v2 --branch -z`)로 Git 변경분 갱신
+10. **`VerificationLoopMiddleware`** *(직접 구현, `verification.py`)* — 코드 수정 대비 검증 명령(`pytest`, `ruff`, `npm test` 등) 종료 코드 추적, 연속 3회 실패 시 Three-Strike 중단 가이드 주입, 수정 재발생 시 기존 통과 스탬프 무효화
+11. **`ArtifactWorkflowMiddleware`** *(직접 구현, `workflow.py`)* — 승인 전 `Plan` 모드의 수정·셸 차단, 검증 기준 파일(`ShellGuard.is_verifier_rule_path`) 자기수정 승인 게이트, `plan_review` · `shell_approval` HITL 인터럽트 조율
 
 ---
 
@@ -92,7 +94,7 @@ flowchart TD
 ### 런타임 스토리지 및 동시성 보호
 
 - **데이터 경로 및 저널 모드 (`DATA_DIR` · `SQLITE_JOURNAL_MODE`)**: 기본값은 로컬 `.data` + `WAL`이며, 공유 네트워크 볼륨 환경에서는 절대 경로와 `DELETE` 모드를 환경변수로 지정할 수 있습니다. 서버 기동 시 `verify_storage_writable()`로 쓰기 가능 여부를 선검증해 실패 시 즉시 기동을 중단하고, `recover_interrupted_runs()`로 비정상 종료된 `running` 세션을 `idle`로 복구합니다.
-- **동일 세션 중복 실행 차단 (`sessions/router.py`)**: SSE 스트림(`EventSourceResponse`)을 열기 전 라우터 `Depends` 단계에서 활성 세션 셋을 검사해 이미 실행 중인 세션 요청은 즉시 `409 SESSION_RUNNING`으로 거절합니다.
+- **동일 세션 중복 실행 차단 및 실행 중 방향 전환 (`sessions/router.py` · `service.py`)**: SSE 스트림(`EventSourceResponse`)을 열기 전 라우터 `Depends` 단계에서 이미 실행 중인 세션의 중복 스트림 요청은 `409 SESSION_RUNNING`으로 거절하며, 실행 도중 방향 수정은 `POST /api/sessions/{id}/steer`(`202 Accepted`) 인박스를 통해 스냅샷 세그먼트를 분할하며 안전하게 주입합니다.
 - **무저장 자격증명 보안 (`shared/llm_credentials.py` · `shared/logging.py`)**: LLM URL과 API 키는 매 요청 `X-LLM-*` 헤더로만 입력받으며 DB·체크포인트·캐시 키(SHA-256 해시 접두사만 사용)에 평문을 남기지 않습니다. 모든 로그는 `SecretRedactionFilter`를 통과합니다.
 
 ### 파일 · DB · 체크포인터 동기화 Revert (`POST /api/sessions/{id}/revert`)

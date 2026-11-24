@@ -20,11 +20,16 @@ _BASE_AGENT_GUIDANCE = (
     "the `ask_user` tool with clear single-choice options (putting the recommended option first "
     "with `recommended=true`, never adding an 'Other' option since the UI provides it) rather "
     "than asking numbered questions in plain text.\n"
-    "- Language policy: Keep internal reasoning, tool arguments, code, symbol names, "
-    "file paths, and shell commands in English/verbatim, but write ALL user-facing responses, "
+    "- Language policy: Keep internal reasoning (`<think>`), tool arguments, code, symbol names, "
+    "file paths, and shell commands in English/verbatim, and write ALL user-facing responses, "
     "`ask_user` questions/options, and markdown artifacts (`/artifacts/implementation_plan.md`, "
     "`/artifacts/task.md`, `/artifacts/walkthrough.md`) in Korean (한국어) by default unless "
-    "the user explicitly requests another language."
+    "the user explicitly requests another language. NEVER output Chinese characters "
+    "(简体中文/繁體中文/CJK Han U+4E00–U+9FFF) in reasoning, responses, code comments, artifacts, "
+    "or tool calls unless quoting existing repository strings or requested by the user.\n"
+    "- Search accuracy (`grep`): `grep` uses literal fixed-string matching (`rg -F`), NOT regular "
+    "expressions. Search exact English identifiers/symbols or Korean strings—never pass regex "
+    "character classes like `[\\u4e00-\\u9fff]` or translated Chinese terms."
 )
 
 _MODE_PROMPTS: dict[str, str] = {

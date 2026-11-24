@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, status
 from pydantic import BaseModel, Field
 
 from backend.app.domains.agent.workspace import (
@@ -46,6 +46,19 @@ async def browse_workspace_directories(
     path: Annotated[str | None, Query()] = None,
 ) -> DirectoryBrowseResponse:
     return await inspector.browse_directories(path)
+
+
+class CreateDirectoryRequest(BaseModel):
+    parent_path: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+
+
+@router.post("/mkdir", status_code=status.HTTP_201_CREATED)
+async def create_workspace_directory(
+    body: CreateDirectoryRequest,
+    inspector: WorkspaceInspectorDep,
+) -> WorkspaceInfo:
+    return await inspector.create_directory(body.parent_path, body.name)
 
 
 @router.get("/tree")

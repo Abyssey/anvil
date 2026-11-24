@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator, Sequence
@@ -25,6 +26,7 @@ class ScriptedTurn:
     reasoning: str = ""
     content: str = ""
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    after_chunk_delay_s: float = 0.0
 
 
 class ScriptedReasoningChatModel(BaseChatModel):
@@ -143,5 +145,12 @@ class ScriptedReasoningChatModel(BaseChatModel):
         run_manager: AsyncCallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[ChatGenerationChunk]:
+        delay = (
+            self.turns[self._cursor[0]].after_chunk_delay_s
+            if self._cursor[0] < len(self.turns)
+            else 0.0
+        )
         for chunk in self._stream(messages, stop=stop, **kwargs):
             yield chunk
+            if delay > 0:
+                await asyncio.sleep(delay)

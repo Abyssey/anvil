@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from backend.app.domains.agent.workspace import WorkspaceInspector
-from backend.app.shared.errors import InvalidWorkspaceError, PathEscapeError
+from backend.app.shared.errors import DomainError, InvalidWorkspaceError, PathEscapeError
 
 
 def _init_git_repo(repo_dir: Path) -> None:
@@ -106,3 +106,32 @@ async def test_browse_directories_lists_subdirs_skips_hidden_and_detects_git(
     by_name = {d.name: d for d in result.directories}
     assert by_name["repo_a"].is_git_repo is True
     assert by_name["plain_dir"].is_git_repo is False
+
+
+@pytest.mark.asyncio
+async def test_create_directory_creates_child_and_rejects_traversal_or_file_conflict(
+    tmp_path: Path,
+) -> None:
+    inspector = WorkspaceInspector()
+    (tmp_path / "occupied.txt").write_text("file", encoding="utf-8")
+
+    created = await inspector.create_directory(str(tmp_path), "my-new-project")
+    expected = (tmp_path / "my-new-project").resolve()
+    assert expected.is_dir()
+    assert created.path == str(expected)
+    assert created.name == "my-new-project"
+    assert created.is_git_repo is False
+
+    # Idempotent if directory already exists
+    again = await inspector.create_directory(str(tmp_path), "my-new-project")
+    assert again.path == str(expected)
+
+    # Reject empty, '.', '..', or path separators
+    for invalid_name in ("", "   ", ".", "..", "../escape", "nested/sub", "back\\slash"):
+        with pytest.raises(DomainError):
+            await inspector.create_directory(str(tmp_path), invalid_name)
+
+    # Reject conflict with existing regular file
+    with pytest.raises(DomainError) as exc_info:
+        await inspector.create_directory(str(tmp_path), "occupied.txt")
+    assert exc_info.value.status_code == 409

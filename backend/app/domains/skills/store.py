@@ -27,6 +27,7 @@ from backend.app.domains.skills.frontmatter import (
 from backend.app.domains.skills.registry_client import (
     ExtractedSkillPackage,
     SkillsRegistryProtocol,
+    normalize_skill_source_input,
 )
 from backend.app.shared.errors import DomainError, InvalidWorkspaceError, PathEscapeError
 
@@ -348,7 +349,11 @@ class SkillStore:
         source: str,
         skill_id: str | None = None,
     ) -> SkillPreview:
-        return await self._registry.preview_remote_skill(source=source, skill_id=skill_id)
+        norm_source, norm_skill_id = normalize_skill_source_input(source, skill_id)
+        return await self._registry.preview_remote_skill(
+            source=norm_source,
+            skill_id=norm_skill_id,
+        )
 
     async def install(self, req: SkillInstallRequest) -> InstalledSkill:
         """Download, validate, and atomically install a skill into global or workspace scope."""
@@ -360,7 +365,8 @@ class SkillStore:
             target_root = self._global_dir
             source_label = "global"
 
-        pkg = await self._registry.fetch_skill_archive(req.source, req.skill_id)
+        norm_source, norm_skill_id = normalize_skill_source_input(req.source, req.skill_id)
+        pkg = await self._registry.fetch_skill_archive(norm_source, norm_skill_id)
         installed = await asyncio.to_thread(
             _write_package_atomically,
             target_root,

@@ -13,7 +13,9 @@ from backend.app.domains.agent.shell_guard import ShellGuard
 
 if TYPE_CHECKING:
     from backend.app.domains.agent.checkpoints import CheckpointCapture
+    from backend.app.domains.agent.cjk_guard import CjkAllowance
     from backend.app.domains.agent.middleware.git_evidence import GitEvidenceTracker
+    from backend.app.domains.agent.middleware.steering import SteeringInbox
     from backend.app.domains.agent.middleware.verification import VerificationTracker
 
 
@@ -33,6 +35,8 @@ class RunCatalog:
     git_tracker: GitEvidenceTracker | None = field(default=None, compare=False)
     checkpoint_capture: CheckpointCapture | None = field(default=None, compare=False)
     verification_tracker: VerificationTracker | None = field(default=None, compare=False)
+    steering_inbox: SteeringInbox | None = field(default=None, compare=False)
+    cjk_allowance: CjkAllowance | None = field(default=None, compare=False)
 
 
 _CURRENT_RUN: ContextVar[RunCatalog | None] = ContextVar("current_run", default=None)

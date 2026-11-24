@@ -17,6 +17,7 @@ from backend.app.domains.sessions.entities import (
     RevertSessionResult,
     RunMode,
     Session,
+    SteerSessionResult,
 )
 from backend.app.shared.dependencies import LLMCredentialsDep, SessionServiceDep
 
@@ -70,6 +71,11 @@ class ResumeInterruptRequest(BaseModel):
 
 class RevertSessionTurnRequest(BaseModel):
     message_id: str = Field(min_length=1)
+
+
+class SteerSessionRequest(BaseModel):
+    content: str = Field(min_length=1)
+    pinned_skills: list[str] = Field(default_factory=list)
 
 
 @projects_router.get("")
@@ -194,6 +200,19 @@ async def revert_session_turn(
     service: SessionServiceDep,
 ) -> RevertSessionResult:
     return await service.revert_from_message(session_id, body.message_id)
+
+
+@router.post("/{session_id}/steer", status_code=status.HTTP_202_ACCEPTED)
+async def steer_session_run(
+    session_id: str,
+    body: SteerSessionRequest,
+    service: SessionServiceDep,
+) -> SteerSessionResult:
+    return await service.steer_session(
+        session_id,
+        body.content,
+        pinned_skills=body.pinned_skills,
+    )
 
 
 async def _validate_stream_dep(

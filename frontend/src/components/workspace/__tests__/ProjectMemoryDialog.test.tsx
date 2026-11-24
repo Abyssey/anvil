@@ -1,5 +1,5 @@
 import { Theme } from "@astryxdesign/core/theme";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "../../../api/client";
 import { defaultThemeSlug, themes } from "../../../astryx-themes";
@@ -167,9 +167,11 @@ describe("ProjectMemoryDialog", () => {
     });
     await screen.findByText("Project memory saved.");
 
-    // Clear with inline confirmation
+    // Clear with AlertDialog confirmation
     fireEvent.click(screen.getByRole("button", { name: "Clear Memory" }));
-    fireEvent.click(screen.getByRole("button", { name: "Confirm Clear" }));
+    expect(clearSpy).not.toHaveBeenCalled();
+    const clearDialog = screen.getByRole("alertdialog");
+    fireEvent.click(within(clearDialog).getByRole("button", { name: "Clear Memory" }));
 
     await waitFor(() => {
       expect(clearSpy).toHaveBeenCalledWith("proj-alpha");

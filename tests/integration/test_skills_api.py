@@ -689,3 +689,128 @@ def test_create_app_mounts_skills_router_and_builtin_skills(tmp_path: Path) -> N
         assert resp.status_code == 200
         names = [(item["scope"], item["name"]) for item in resp.json()]
         assert ("bundled", "codebase-onboarding") in names
+
+
+@pytest.mark.asyncio
+async def test_monorepo_tarball_over_30mb_compressed_and_unrelated_symlinks_succeeds() -> None:
+    import os
+
+    # Build a compressed .tar.gz > 27 MiB where unrelated folders come BEFORE the skill
+    # and also contain symlinks outside the target skill directory.
+    incompressible_blob = os.urandom(27 * 1024 * 1024)
+    archive_bytes = _make_tar_gz(
+        [
+            ("mono-head/apps/demo/asset.bin", incompressible_blob, tarfile.REGTYPE, ""),
+            ("mono-head/packages/docs/readme-link", None, tarfile.SYMTYPE, "../../README.md"),
+            (
+                "mono-head/skills/target-skill/SKILL.md",
+                _skill_md("target-skill", "Extracted from a large monorepo."),
+                tarfile.REGTYPE,
+                "",
+            ),
+            (
+                "mono-head/skills/target-skill/references/tips.md",
+                b"# Tips\nUse streaming tar.\n",
+                tarfile.REGTYPE,
+                "",
+            ),
+        ]
+    )
+    assert len(archive_bytes) > 26 * 1024 * 1024
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "codeload.github.com":
+            return httpx.Response(200, content=archive_bytes)
+        return httpx.Response(404)
+
+    client = SkillsShClient(transport=httpx.MockTransport(handler))
+    pkg = await client.fetch_skill_archive("acme/huge-monorepo", "target-skill")
+    assert pkg.name == "target-skill"
+    assert sorted(pkg.files.keys()) == ["SKILL.md", "references/tips.md"]
+
+
+@pytest.mark.asyncio
+async def test_streaming_extractor_early_exits_before_downloading_monorepo_tail() -> None:
+    import os
+
+    tail_blob = os.urandom(28 * 1024 * 1024)
+    archive_bytes = _make_tar_gz(
+        [
+            (
+                "mono-head/skills/fast-skill/SKILL.md",
+                _skill_md("fast-skill", "Located near start of archive."),
+                tarfile.REGTYPE,
+                "",
+            ),
+            (
+                "mono-head/skills/fast-skill/notes.md",
+                b"quick note",
+                tarfile.REGTYPE,
+                "",
+            ),
+            ("mono-head/z_packages/heavy/tail.bin", tail_blob, tarfile.REGTYPE, ""),
+        ]
+    )
+    served_bytes = 0
+
+    class CountingByteStream(httpx.AsyncByteStream):
+        async def __aiter__(self):  # type: ignore[no-untyped-def]
+            nonlocal served_bytes
+            step = 65536
+            for idx in range(0, len(archive_bytes), step):
+                chunk = archive_bytes[idx : idx + step]
+                served_bytes += len(chunk)
+                yield chunk
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "codeload.github.com":
+            return httpx.Response(200, stream=CountingByteStream())
+        return httpx.Response(404)
+
+    client = SkillsShClient(transport=httpx.MockTransport(handler))
+    pkg = await client.fetch_skill_archive("acme/mono", "fast-skill")
+    assert pkg.name == "fast-skill"
+    assert sorted(pkg.files.keys()) == ["SKILL.md", "notes.md"]
+    # Should stop reading well before consuming the 28 MiB tail
+    assert served_bytes < 5 * 1024 * 1024
+
+
+@pytest.mark.asyncio
+async def test_skill_store_normalizes_three_segment_and_github_url_sources(
+    tmp_path: Path,
+) -> None:
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    global_dir = tmp_path / "global"
+    fake = FakeSkillsRegistry()
+    fake.packages[("vercel-labs/agent-skills", "react-patterns")] = extract_skill_from_tar_bytes(
+        _make_tar_gz(
+            [
+                (
+                    "repo-main/skills/react-patterns/SKILL.md",
+                    _skill_md("react-patterns", "Normalized install."),
+                    tarfile.REGTYPE,
+                    "",
+                )
+            ]
+        ),
+        source="vercel-labs/agent-skills",
+        skill_id="react-patterns",
+    )
+    store = SkillStore(bundled_dir=bundled, global_dir=global_dir, registry_client=fake)
+
+    inst1 = await store.install(
+        SkillInstallRequest(
+            source="vercel-labs/agent-skills/react-patterns",
+            scope="global",
+        )
+    )
+    assert inst1.name == "react-patterns"
+
+    inst2 = await store.install(
+        SkillInstallRequest(
+            source="https://github.com/vercel-labs/agent-skills/tree/main/skills/react-patterns",
+            scope="global",
+        )
+    )
+    assert inst2.name == "react-patterns"

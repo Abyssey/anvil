@@ -560,9 +560,10 @@ flowchart LR
 
 ### 6-1. Middleware 체인 조립 순서
 
-`DeepAgentHarness`(`domains/agent/harness.py`)는 `create_deep_agent`(`deepagents` 제공)를 호출할 때 기본 `TodoListMiddleware` 1종과 직접 구현한 커스텀 미들웨어 8종을 아래 순서로 연결합니다.
+`DeepAgentHarness`(`domains/agent/harness.py`)는 `create_deep_agent`(`deepagents` 제공)를 호출할 때 기본 `TodoListMiddleware` 1종과 직접 구현한 커스텀 미들웨어 9종을 아래 순서로 연결합니다.
 
 - **`TodoListMiddleware`** *(LangChain 제공)*: `write_todos` 체크리스트 상태 관리
+- **`SteeringQueueMiddleware`** *(직접 구현)*: 실행 도중 들어온 사용자 방향 전환 메시지(`SteeringInbox`)를 다음 모델 호출 직전(`abefore_model`)에 주입
 - **`RunPromptMiddleware`** *(직접 구현)*: Prefix Cache 친화적 시스템 프롬프트 조립
 - **`DynamicMemoryMiddleware`** *(확장 구현)*: 매 턴 루트 `/AGENTS.md` 및 프로젝트 메모리 디스크 재로드
 - **`SubdirAgentsReadMiddleware`** *(직접 구현)*: 하위 디렉터리 파일 열람 시 로컬 `AGENTS.md` 지연 주입
@@ -604,6 +605,16 @@ async with RunContext.activate(catalog):
 - **프론트엔드 연결 원칙 요약**
   - 프론트엔드는 원본 SSE 이벤트와 메시지 배열을 변형 없이 보존하고, 렌더링 직전 순수 셀렉터 함수로만 연속 탐색 그룹과 서브에이전트 카드를 계산합니다. UI는 커스텀 CSS 없이 `@astryxdesign/core` 컴포넌트 조합만으로 구성했습니다.
 
+### 6-4. 실행 중 Queue 적재와 실시간 작업 방향 전환 (`Mid-Run Steering`, 직접 구현)
+
+에이전트가 수십 초간 탐색·수정을 수행하는 도중에 후속 작업을 예약하거나 진행 방향을 바로잡을 수 있도록 **세션별 대기열(`Queue`)**과 **실시간 개입(`Steer`)** 경로를 분리해 구현했습니다.
+
+- **후속 턴 대기열 (`Queue`)**: 실행 중 기본 전송(`Enter`)한 메시지는 프론트엔드 세션별 큐 트레이에 쌓이며, 현재 턴이 승인 대기(`interrupt`)나 오류 없이 정상 완료(`IDLE`)되면 자동으로 다음 턴을 이어 실행합니다(`Stop`이나 에러 발생 시에는 큐를 보존한 채 `Paused` 상태로 멈춤).
+- **실행 중 방향 전환 (`POST /api/sessions/{id}/steer` + `SteeringQueueMiddleware`)**:
+  - 큐 항목의 `Steer` 버튼 또는 `Ctrl+Enter`(`⌘+Enter`)를 누르면 `RunCatalog.steering_inbox`에 지시가 적재됩니다.
+  - 진행 중인 도구 호출을 안전하게 마친 직후 `SteeringQueueMiddleware.abefore_model`이 인박스를 비워 `HumanMessage`를 상태 그래프에 합류시키고, `CheckpointCapture.rotate_segment()`로 직전까지의 파일 스냅샷을 마감한 뒤 `steer_applied` SSE 이벤트를 내보냅니다.
+  - 타임라인과 SQLite DB에는 **`[개입 전 에이전트 세그먼트] → [사용자 Steer 메시지] → [방향 전환 후 에이전트 세그먼트]`** 순으로 시간순 분리 저장되어, 개입 이후 구간만 선택적으로 `Revert`할 수도 있습니다.
+
 ---
 
 ## Lessons Learned
@@ -631,19 +642,14 @@ async with RunContext.activate(catalog):
 
 ## 한계점 및 후속 과제
 
-이번 구현에서 미처 다루지 못해 다음 단계로 남겨둔 과제입니다.
+이번 구현 이후 다음 단계로 확장해 볼 수 있는 아키텍처 과제입니다.
 
-### 1. 작업 도중 메시지 큐를 통한 실시간 방향 전환 (`Mid-Run Steering`)
+### 1. 초장기 세션을 위한 자동 문맥 압축 (`Context Compaction`)
 
-- **현재 구조의 한계**
-  - 현재는 세션이 `RUNNING` 상태일 때 동일 세션으로 추가 메시지 요청이 들어오면 상태 경합과 메시지 뒤섞임을 막기 위해 API 진입부에서 `409 SESSION_RUNNING`으로 즉시 거절합니다.
-  - 이 때문에 에이전트가 작업 도중 엉뚱한 디렉터리를 탐색하거나 요구사항을 다르게 해석해 진행하고 있어도, 실행 흐름을 유지한 채 *"그 모듈 말고 `auth/` 쪽부터 확인해 줘"*처럼 중간에 방향만 틀어줄 수 없습니다. 사용자가 일단 `Stop`(`Abort`)으로 현재 스트림을 강제 종료한 뒤 새 턴을 다시 열어야 하므로, 직전까지 쌓인 추론 맥락이 끊기는 아쉬움이 있습니다.
-- **후속 구현 방향 (`In-Flight Message Queue` 주입)**
-  - 세션별 비동기 메시지 큐(`asyncio.Queue`)와 실행 중 개입 전용 엔드포인트(예: `POST /api/sessions/{id}/steer`)를 두어, `RUNNING` 상태에서도 사용자의 추가 지시를 큐에 논블로킹으로 적재하는 구조를 구상하고 있습니다.
-  - LangGraph 상태 머신에서는 진행 중인 도구 실행을 강제로 끊지 않고 안전하게 마무리한 직후, 다음 모델 추론에 들어가기 전 미들웨어 훅(`abefore_model`)에서 큐를 비워(`drain`) 대기 중인 사용자 지시를 `messages` 배열 끝에 `HumanMessage`로 합류시킵니다.
-  - 이렇게 확장하면 파일 스냅샷이나 서브프로세스 무결성을 해치지 않으면서도, 에이전트가 다음 추론 스텝부터 즉시 바뀐 지시사항을 반영해 작업을 이어갈 수 있습니다.
+- 서브에이전트 격리와 `SKILL.md` 지연 로딩으로 탐색 토큰 소모를 줄였지만, 한 세션에서 수십 턴 이상 연속으로 코드를 수정하면 메인 `messages` 배열 자체가 모델의 최대 컨텍스트 길이에 가까워집니다.
+- 누적 토큰 수가 임계치에 도달했을 때 오래된 도구 입출력 원문을 구조화된 요약 메시지로 치환하되, 최근 N턴과 핵심 결정 사항은 원문 그대로 유지하는 요약 압축 미들웨어를 후속 과제로 남겨두었습니다.
 
-### 2. 외부 스킬 레포지토리 수집 안정화 및 UI 안전장치 보완
+### 2. Git Worktree 기반 병렬 에이전트 세션 격리
 
-- **원격 스킬(`skills.sh`) 가져오기 예외 수정**: 원격 GitHub 저장소에서 스킬 아카이브를 받아 추출할 때, 비표준 디렉터리 구조나 기본 브랜치 차이 등으로 수집이 실패하는 케이스를 보완해야 합니다.
-- **위험 동작 재확인 다이얼로그 추가**: 현재 사이드바에서 세션이나 프로젝트 삭제를 누르면 즉시 삭제 요청이 전송되므로, 복구 불가능한 삭제 동작 전 한 번 더 확인을 거치는 모달(`AlertDialog`) 적용이 남아 있습니다.
+- 현재는 같은 로컬 저장소에 연결된 두 세션을 동시에 수정 모드로 돌리면 워킹 트리 파일이 서로 덮어쓰일 수 있어 세션별 순차 실행을 기본으로 합니다.
+- 세션마다 독립된 `git worktree` 브랜치를 자동 마운트해 여러 기능을 병렬로 구현·검증한 뒤 메인 브랜치로 병합하는 구조를 다음 확장 방향으로 구상하고 있습니다.

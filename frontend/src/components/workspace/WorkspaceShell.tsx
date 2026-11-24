@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { AppShell } from "@astryxdesign/core/AppShell";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Button } from "@astryxdesign/core/Button";
@@ -60,6 +61,32 @@ export function WorkspaceShell() {
   const { effectiveDark, toggleColorMode } = useColorMode();
   const [isCompactShell, setIsCompactShell] = useState<boolean>(readCompactShell);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [pendingDeleteSession, setPendingDeleteSession] = useState<Session | null>(null);
+  const [isDeletingSession, setIsDeletingSession] = useState(false);
+  const [pendingDeleteProject, setPendingDeleteProject] = useState<Project | null>(null);
+  const [isDeletingProject, setIsDeletingProject] = useState(false);
+
+  const handleConfirmDeleteSession = async () => {
+    if (!pendingDeleteSession || isDeletingSession) return;
+    setIsDeletingSession(true);
+    try {
+      await actions.removeSession(pendingDeleteSession.id);
+      setPendingDeleteSession(null);
+    } finally {
+      setIsDeletingSession(false);
+    }
+  };
+
+  const handleConfirmDeleteProject = async () => {
+    if (!pendingDeleteProject || isDeletingProject) return;
+    setIsDeletingProject(true);
+    try {
+      await actions.removeProject(pendingDeleteProject.id);
+      setPendingDeleteProject(null);
+    } finally {
+      setIsDeletingProject(false);
+    }
+  };
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
@@ -168,7 +195,7 @@ export function WorkspaceShell() {
                         size="sm"
                         isIconOnly
                         icon={<Icon icon={TrashIcon} size="sm" />}
-                        onClick={() => void actions.removeProject(project.id)}
+                        onClick={() => setPendingDeleteProject(project)}
                       />
                     )}
                   </HStack>
@@ -195,7 +222,7 @@ export function WorkspaceShell() {
                           icon={<Icon icon={TrashIcon} size="sm" />}
                           onClick={(e) => {
                             e.stopPropagation();
-                            void actions.removeSession(session.id);
+                            setPendingDeleteSession(session);
                           }}
                         />
                       }
@@ -473,6 +500,51 @@ export function WorkspaceShell() {
           </Drawer>
         </>
       )}
+
+      <AlertDialog
+        isOpen={pendingDeleteSession !== null}
+        onOpenChange={(open) => {
+          if (!open && !isDeletingSession) {
+            setPendingDeleteSession(null);
+          }
+        }}
+        title={`Delete session "${pendingDeleteSession?.title ?? ""}"?`}
+        description={
+          pendingDeleteSession &&
+          (pendingDeleteSession.status === "running" ||
+            (state.activeSession?.id === pendingDeleteSession.id && state.isStreaming))
+            ? "This session is currently running. Deleting it will stop the active run and permanently remove its conversation history, artifacts, and turn snapshots."
+            : "This permanently deletes the conversation history, artifacts, and turn snapshots for this session."
+        }
+        cancelLabel="Cancel"
+        actionLabel="Delete Session"
+        actionVariant="destructive"
+        isActionLoading={isDeletingSession}
+        onAction={() => void handleConfirmDeleteSession()}
+      />
+
+      <AlertDialog
+        isOpen={pendingDeleteProject !== null}
+        onOpenChange={(open) => {
+          if (!open && !isDeletingProject) {
+            setPendingDeleteProject(null);
+          }
+        }}
+        title={`Remove project "${pendingDeleteProject?.name ?? ""}"?`}
+        description={
+          pendingDeleteProject
+            ? (() => {
+                const count = sessionsForProject(state.sessions, pendingDeleteProject).length;
+                return `This removes "${pendingDeleteProject.name}" along with ${count} ${count === 1 ? "session" : "sessions"} and its project memory. Local files on disk (${pendingDeleteProject.path}) will not be deleted.`;
+              })()
+            : ""
+        }
+        cancelLabel="Cancel"
+        actionLabel="Remove Project"
+        actionVariant="destructive"
+        isActionLoading={isDeletingProject}
+        onAction={() => void handleConfirmDeleteProject()}
+      />
     </AppShell>
   );
 }

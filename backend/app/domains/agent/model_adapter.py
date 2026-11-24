@@ -38,22 +38,55 @@ def _extract_reasoning(obj: object) -> str | None:
 class ReasoningChatOpenAI(ChatOpenAI):
     """ChatOpenAI subclass preserving provider delta/message `reasoning_content`."""
 
-    def _disable_rejected_thinking(self, exc: BaseException) -> bool:
-        if not (isinstance(self.extra_body, Mapping) and "enable_thinking" in self.extra_body):
-            return False
+    def _disable_rejected_params(self, exc: BaseException) -> bool:
         lowered = str(exc).lower()
-        if "enable_thinking" not in lowered and "extra inputs" not in lowered:
-            return False
-        remaining = {k: v for k, v in self.extra_body.items() if k != "enable_thinking"}
-        self.extra_body = remaining or None
-        logger.info(
-            "agent.enable_thinking_fallback",
-            extra={
-                "event": "agent.enable_thinking_fallback",
-                "model": self.model_name,
-            },
+        changed = False
+
+        if (
+            isinstance(self.extra_body, Mapping)
+            and "enable_thinking" in self.extra_body
+            and ("enable_thinking" in lowered or "extra inputs" in lowered)
+        ):
+            remaining = {k: v for k, v in self.extra_body.items() if k != "enable_thinking"}
+            self.extra_body = remaining or None
+            logger.info(
+                "agent.enable_thinking_fallback",
+                extra={
+                    "event": "agent.enable_thinking_fallback",
+                    "model": self.model_name,
+                },
+            )
+            changed = True
+
+        rejection_hint = any(
+            token in lowered
+            for token in ("unsupported", "not supported", "unrecognized", "extra inputs", "invalid")
         )
-        return True
+        if rejection_hint and self.temperature is not None and "temperature" in lowered:
+            self.temperature = None
+            logger.info(
+                "agent.sampling_param_fallback",
+                extra={
+                    "event": "agent.sampling_param_fallback",
+                    "model": self.model_name,
+                    "param": "temperature",
+                },
+            )
+            changed = True
+
+        if rejection_hint and self.top_p is not None and "top_p" in lowered:
+            self.top_p = None
+            logger.info(
+                "agent.sampling_param_fallback",
+                extra={
+                    "event": "agent.sampling_param_fallback",
+                    "model": self.model_name,
+                    "param": "top_p",
+                },
+            )
+            changed = True
+
+        return changed
 
     async def _agenerate(
         self,
@@ -62,16 +95,15 @@ class ReasoningChatOpenAI(ChatOpenAI):
         run_manager: AsyncCallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> ChatResult:
-        try:
-            return await super()._agenerate(
-                messages, stop=stop, run_manager=run_manager, **kwargs
-            )
-        except openai.BadRequestError as exc:
-            if self._disable_rejected_thinking(exc):
+        for _ in range(4):
+            try:
                 return await super()._agenerate(
                     messages, stop=stop, run_manager=run_manager, **kwargs
                 )
-            raise
+            except openai.BadRequestError as exc:
+                if not self._disable_rejected_params(exc):
+                    raise
+        return await super()._agenerate(messages, stop=stop, run_manager=run_manager, **kwargs)
 
     async def _astream(
         self,
@@ -82,19 +114,9 @@ class ReasoningChatOpenAI(ChatOpenAI):
         stream_usage: bool | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[ChatGenerationChunk]:
-        emitted = False
-        try:
-            async for chunk in super()._astream(
-                messages,
-                stop=stop,
-                run_manager=run_manager,
-                stream_usage=stream_usage,
-                **kwargs,
-            ):
-                emitted = True
-                yield chunk
-        except openai.BadRequestError as exc:
-            if not emitted and self._disable_rejected_thinking(exc):
+        for _ in range(4):
+            emitted = False
+            try:
                 async for chunk in super()._astream(
                     messages,
                     stop=stop,
@@ -102,9 +124,12 @@ class ReasoningChatOpenAI(ChatOpenAI):
                     stream_usage=stream_usage,
                     **kwargs,
                 ):
+                    emitted = True
                     yield chunk
                 return
-            raise
+            except openai.BadRequestError as exc:
+                if emitted or not self._disable_rejected_params(exc):
+                    raise
 
     def _convert_chunk_to_generation_chunk(
         self,
@@ -197,6 +222,8 @@ class ModelFactory:
             model=creds.model,
             base_url=creds.base_url,
             api_key=creds.api_key,  # type: ignore[arg-type]
+            temperature=0.2,
+            top_p=0.85,
             max_retries=0,
             streaming=True,
             extra_body=extra_body,

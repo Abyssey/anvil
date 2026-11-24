@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import logging
 import time
@@ -24,6 +25,7 @@ from backend.app.domains.sessions.entities import (
     RunMode,
     Session,
     SessionStatus,
+    SteerSessionResult,
     StreamEvent,
     ToolCallRecord,
     UserQuestionItem,
@@ -508,14 +510,60 @@ class SessionService:
                     pinned_skills=pinned_skills,
                     **extra_kwargs,  # type: ignore[arg-type]
                 )
-                async for ev in self._consume_and_persist_stream(
-                    session,
-                    raw_stream,
-                    model=creds.model,
-                ):
-                    yield ev
+                async with contextlib.aclosing(
+                    self._consume_and_persist_stream(
+                        session,
+                        raw_stream,
+                        model=creds.model,
+                    )
+                ) as persisted_stream:
+                    async for ev in persisted_stream:
+                        yield ev
         finally:
             self._active_stream_sessions.discard(session.id)
+
+    async def steer_session(
+        self,
+        session_id: str,
+        content: str,
+        *,
+        pinned_skills: list[str] | None = None,
+    ) -> SteerSessionResult:
+        """Enqueue a steering instruction onto an actively streaming session."""
+        session = await self._repo.get_session(session_id)
+        cleaned = content.strip()
+        if not cleaned:
+            raise DomainError(
+                "Steering message content must not be empty.",
+                status_code=400,
+                code="EMPTY_MESSAGE",
+            )
+        enqueue_fn = getattr(self._harness, "enqueue_steer", None)
+        steered = (
+            enqueue_fn(session.id, cleaned, pinned_skills=pinned_skills)
+            if callable(enqueue_fn)
+            else None
+        )
+        if steered is None or session.id not in self._active_stream_sessions:
+            raise DomainError(
+                "Session is not actively streaming.",
+                status_code=409,
+                code="SESSION_NOT_RUNNING",
+            )
+        steer_id = str(getattr(steered, "id", "") or uuid.uuid4().hex[:12])
+        logger.info(
+            "session.steered",
+            extra={
+                "event": "session.steered",
+                "session_id": session.id,
+                "steer_id": steer_id,
+            },
+        )
+        return SteerSessionResult(
+            accepted=True,
+            steer_id=steer_id,
+            session_id=session.id,
+        )
 
     async def validate_resume(self, session_id: str, decision: str) -> Session:
         """Pre-flight check before opening the SSE stream so errors return HTTP 4xx."""
@@ -595,12 +643,15 @@ class SessionService:
                     project_id=session.project_id or session.id,
                     answers=[a.model_dump() for a in answer_list] if answer_list else None,
                 )
-                async for ev in self._consume_and_persist_stream(
-                    session,
-                    raw_stream,
-                    model=creds.model,
-                ):
-                    yield ev
+                async with contextlib.aclosing(
+                    self._consume_and_persist_stream(
+                        session,
+                        raw_stream,
+                        model=creds.model,
+                    )
+                ) as persisted_stream:
+                    async for ev in persisted_stream:
+                        yield ev
         finally:
             self._active_stream_sessions.discard(session.id)
 
@@ -689,6 +740,78 @@ class SessionService:
                             "kind": pending_interrupt.kind,
                         },
                     )
+                elif h_event.event == "steer_applied":
+                    seg_content = "".join(token_parts).strip()
+                    seg_thinking = "".join(thinking_parts).strip()
+                    seg_tools = [
+                        tool_map[tid].model_copy(update={"status": "success"})
+                        if tool_map[tid].status == "running"
+                        else tool_map[tid]
+                        for tid in tool_order
+                    ]
+                    raw_seg_cid = h_event.data.get("segment_checkpoint_id")
+                    seg_cid = (
+                        raw_seg_cid if isinstance(raw_seg_cid, str) and raw_seg_cid else None
+                    )
+                    raw_seg_changed = h_event.data.get("segment_changed_files")
+                    seg_changed = (
+                        [str(p) for p in raw_seg_changed if isinstance(p, str)]
+                        if isinstance(raw_seg_changed, list)
+                        else []
+                    )
+                    raw_seg_stamp = h_event.data.get("segment_verification_stamp")
+                    seg_stamp = (
+                        raw_seg_stamp
+                        if isinstance(raw_seg_stamp, str)
+                        and raw_seg_stamp in {"passed", "failed", "none", "not_needed"}
+                        else None
+                    )
+                    flushed_assistant: dict[str, object] | None = None
+                    if seg_content or seg_thinking or seg_tools or seg_cid is not None:
+                        pre_msg = ChatMessage(
+                            id=uuid.uuid4().hex[:12],
+                            session_id=session.id,
+                            role="assistant",
+                            content=seg_content,
+                            thinking=seg_thinking,
+                            tool_calls=seg_tools,
+                            checkpoint_id=seg_cid,
+                            changed_files=seg_changed,
+                            verification_stamp=seg_stamp,  # type: ignore[arg-type]
+                            created_at=datetime.now(UTC),
+                        )
+                        await self._repo.append_message(pre_msg)
+                        flushed_assistant = pre_msg.model_dump(mode="json")
+
+                    thinking_parts.clear()
+                    token_parts.clear()
+                    tool_map.clear()
+                    tool_order.clear()
+                    tool_started_at.clear()
+
+                    persisted_user_msgs: list[dict[str, object]] = []
+                    raw_steered = h_event.data.get("messages")
+                    if isinstance(raw_steered, list):
+                        for entry in raw_steered:
+                            if not isinstance(entry, dict):
+                                continue
+                            text_val = str(entry.get("content") or "").strip()
+                            if not text_val:
+                                continue
+                            u_msg = ChatMessage(
+                                id=uuid.uuid4().hex[:12],
+                                session_id=session.id,
+                                role="user",
+                                content=text_val,
+                                created_at=datetime.now(UTC),
+                            )
+                            await self._repo.append_message(u_msg)
+                            persisted_user_msgs.append(u_msg.model_dump(mode="json"))
+
+                    out_data = {
+                        "flushed_assistant": flushed_assistant,
+                        "user_messages": persisted_user_msgs,
+                    }
                 elif h_event.event == "turn_meta":
                     raw_cid = h_event.data.get("checkpoint_id")
                     if isinstance(raw_cid, str) and raw_cid:

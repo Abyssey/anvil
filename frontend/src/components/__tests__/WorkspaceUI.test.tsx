@@ -1,5 +1,5 @@
 import { Theme } from "@astryxdesign/core/theme";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { defaultThemeSlug, themes } from "../../astryx-themes";
 import {
@@ -264,14 +264,20 @@ describe("Workspace UI (Astryx + HITL)", () => {
     expect(val.actions.sendMessage).toHaveBeenCalledWith("Explain architecture");
     unmount();
 
-    const streamingVal = makeMockValue({ isStreaming: true });
+    const enqueueMessage = vi.fn().mockResolvedValue(undefined);
+    const streamingVal = makeMockValue({ isStreaming: true }, { enqueueMessage });
     renderWorkspace(streamingVal);
     const streamingBox = screen.getByRole("textbox", { name: "Message input" });
-    expect(streamingBox).toHaveAttribute("aria-disabled", "true");
+    expect(streamingBox).not.toHaveAttribute("aria-disabled", "true");
     const stopBtn = screen.getByRole("button", { name: /stop/i });
     expect(stopBtn).not.toBeDisabled();
     fireEvent.click(stopBtn);
     expect(streamingVal.actions.stopStream).toHaveBeenCalledTimes(1);
+
+    streamingBox.textContent = "Follow-up task";
+    fireEvent.input(streamingBox);
+    fireEvent.keyDown(streamingBox, { key: "Enter", code: "Enter" });
+    expect(enqueueMessage).toHaveBeenCalledWith("Follow-up task");
   });
 
   it("shows inline Plan review controls when drawer is closed and supports Cancel (deny)", () => {
@@ -758,5 +764,145 @@ describe("Workspace UI (Astryx + HITL)", () => {
     expect(screen.getByRole("textbox", { name: "Message input" })).toHaveTextContent(
       "Refactor parser and run pytest",
     );
+  });
+
+  it("keeps Composer enabled while streaming, renders queued prompts with Steer/Edit/Remove, and supports Paused Send", async () => {
+    const steerQueuedMessage = vi.fn().mockResolvedValue(undefined);
+    const editQueuedMessage = vi.fn();
+    const removeQueuedMessage = vi.fn();
+    const sendQueuedMessageNow = vi.fn().mockResolvedValue(undefined);
+
+    const streamingVal = makeMockValue(
+      {
+        isStreaming: true,
+        queuedMessages: [
+          {
+            id: "q-1",
+            content: "Switch focus to auth.py",
+            pinnedSkills: ["verify"],
+            createdAt: "2026-11-24T00:00:00Z",
+          },
+        ],
+        isQueuePaused: false,
+      },
+      {
+        steerQueuedMessage,
+        editQueuedMessage,
+        removeQueuedMessage,
+        sendQueuedMessageNow,
+      },
+    );
+
+    const { rerender } = renderWorkspace(streamingVal);
+
+    const input = screen.getByRole("textbox", { name: "Message input" });
+    expect(input).not.toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByText("Switch focus to auth.py")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Steer" }));
+    expect(steerQueuedMessage).toHaveBeenCalledWith("q-1");
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit queued message 1" }));
+    expect(editQueuedMessage).toHaveBeenCalledWith("q-1");
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove queued message 1" }));
+    expect(removeQueuedMessage).toHaveBeenCalledWith("q-1");
+
+    const pausedVal = makeMockValue(
+      {
+        isStreaming: false,
+        queuedMessages: [
+          {
+            id: "q-1",
+            content: "Switch focus to auth.py",
+            pinnedSkills: [],
+            createdAt: "2026-11-24T00:00:00Z",
+          },
+        ],
+        isQueuePaused: true,
+      },
+      { sendQueuedMessageNow },
+    );
+    rerender(
+      <Theme theme={themes[defaultThemeSlug]}>
+        <WorkspaceProvider initialValue={pausedVal}>
+          <WorkspaceShell />
+          <SettingsDialog />
+          <AddProjectDialog />
+        </WorkspaceProvider>
+      </Theme>,
+    );
+
+    expect(screen.getByText("Paused")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Send queued message 1" }));
+    expect(sendQueuedMessageNow).toHaveBeenCalledWith("q-1");
+  });
+
+  it("confirms via AlertDialog before deleting a session or removing a project", async () => {
+    const removeSession = vi.fn().mockResolvedValue(undefined);
+    const removeProject = vi.fn().mockResolvedValue(undefined);
+
+    const val = makeMockValue(
+      {
+        projects: [
+          {
+            id: "proj-1",
+            name: "alpha",
+            path: "/repo/alpha",
+            is_git_repo: true,
+            branch: "main",
+            created_at: "2026-11-23T00:00:00Z",
+            updated_at: "2026-11-23T00:00:00Z",
+          },
+          {
+            id: "proj-2",
+            name: "beta",
+            path: "/repo/beta",
+            is_git_repo: true,
+            branch: "dev",
+            created_at: "2026-11-23T00:00:00Z",
+            updated_at: "2026-11-23T00:00:00Z",
+          },
+        ],
+        sessions: [
+          {
+            id: "sess-1",
+            project_id: "proj-1",
+            title: "Fix login bug",
+            workspace_path: "/repo/alpha",
+            mode: "ask",
+            status: "idle",
+            pending_interrupt: null,
+            created_at: "2026-11-23T00:00:00Z",
+            updated_at: "2026-11-23T00:00:00Z",
+          },
+        ],
+      },
+      { removeSession, removeProject },
+    );
+
+    renderWorkspace(val);
+
+    // 1. Session delete requires AlertDialog confirmation
+    fireEvent.click(screen.getByRole("button", { name: "Delete Fix login bug" }));
+    expect(removeSession).not.toHaveBeenCalled();
+
+    const sessDialog = screen.getByRole("alertdialog");
+    expect(sessDialog).toHaveTextContent(/Fix login bug/);
+    fireEvent.click(within(sessDialog).getByRole("button", { name: "Delete Session" }));
+    await waitFor(() => {
+      expect(removeSession).toHaveBeenCalledWith("sess-1");
+    });
+
+    // 2. Project remove requires AlertDialog confirmation and states disk files are untouched
+    fireEvent.click(screen.getByRole("button", { name: "Remove project alpha" }));
+    expect(removeProject).not.toHaveBeenCalled();
+
+    const projDialog = screen.getByRole("alertdialog");
+    expect(projDialog).toHaveTextContent(/alpha/);
+    fireEvent.click(within(projDialog).getByRole("button", { name: "Remove Project" }));
+    await waitFor(() => {
+      expect(removeProject).toHaveBeenCalledWith("proj-1");
+    });
   });
 });

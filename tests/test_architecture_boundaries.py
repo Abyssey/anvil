@@ -56,6 +56,7 @@ def _has_prefix(module_name: str, prefixes: tuple[str, ...]) -> bool:
 
 
 def test_pure_stdlib_domain_modules() -> None:
+    _assert_stdlib_only(BACKEND_APP / "domains" / "agent" / "cjk_guard.py")
     _assert_stdlib_only(BACKEND_APP / "domains" / "agent" / "shell_guard.py")
     _assert_stdlib_only(BACKEND_APP / "domains" / "artifacts" / "walkthrough_diff.py")
     _assert_stdlib_only(BACKEND_APP / "shared" / "logging.py")

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Badge, type BadgeVariant } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
@@ -64,11 +65,56 @@ function formatInstalls(count: number): string {
 
 function parseDirectSource(raw: string): { source: string; skillId?: string } {
   const trimmed = raw.trim();
+  if (!trimmed) {
+    return { source: "" };
+  }
+  if (trimmed.startsWith("https://") || trimmed.startsWith("http://")) {
+    try {
+      const parsed = new URL(trimmed);
+      const host = parsed.hostname.toLowerCase();
+      const parts = parsed.pathname.split("/").filter(Boolean);
+      if (
+        (host === "github.com" || host === "www.github.com") &&
+        parts.length >= 2
+      ) {
+        const ownerRepo = `${parts[0]}/${parts[1].replace(/\.git$/, "")}`;
+        if (parts.length >= 5 && (parts[2] === "tree" || parts[2] === "blob")) {
+          const leaf = parts[parts.length - 1];
+          const skillId =
+            leaf.toLowerCase() === "skill.md" && parts.length >= 6
+              ? parts[parts.length - 2]
+              : leaf.toLowerCase() !== "skill.md"
+                ? leaf
+                : undefined;
+          return { source: ownerRepo, skillId };
+        }
+        return { source: ownerRepo };
+      }
+      if (
+        (host === "skills.sh" || host === "www.skills.sh") &&
+        parts.length >= 3
+      ) {
+        return {
+          source: `${parts[0]}/${parts[1]}`,
+          skillId: parts[parts.length - 1],
+        };
+      }
+    } catch {
+      return { source: trimmed };
+    }
+  }
   const atIdx = trimmed.indexOf("@");
   if (atIdx > 0) {
     return {
       source: trimmed.slice(0, atIdx).trim(),
       skillId: trimmed.slice(atIdx + 1).trim() || undefined,
+    };
+  }
+  const slashParts = trimmed.split("/").filter(Boolean);
+  if (slashParts.length === 3 && !trimmed.startsWith(".") && !trimmed.startsWith("/")) {
+    return {
+      source: `${slashParts[0]}/${slashParts[1]}`,
+      skillId: slashParts[2],
     };
   }
   return { source: trimmed };
@@ -91,7 +137,7 @@ export function SkillsDialog() {
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
 
-  const [pendingDeleteKey, setPendingDeleteKey] = useState<string | null>(null);
+  const [pendingDeleteSkill, setPendingDeleteSkill] = useState<InstalledSkill | null>(null);
   const [deletingKey, setDeletingKey] = useState<string | null>(null);
   const [installingKey, setInstallingKey] = useState<string | null>(null);
 
@@ -104,11 +150,11 @@ export function SkillsDialog() {
     if (state.skillsOpen) {
       setError(null);
       setNotice(null);
-      setPendingDeleteKey(null);
+      setPendingDeleteSkill(null);
       void refreshInstalledSkills();
     } else {
       setPreview(null);
-      setPendingDeleteKey(null);
+      setPendingDeleteSkill(null);
     }
   }, [state.skillsOpen, refreshInstalledSkills]);
 
@@ -272,14 +318,16 @@ export function SkillsDialog() {
     setDirectSource("");
   };
 
-  const handleConfirmDelete = async (skill: InstalledSkill) => {
+  const handleConfirmDelete = async () => {
+    if (!pendingDeleteSkill || deletingKey !== null) return;
+    const skill = pendingDeleteSkill;
     const key = `${skill.scope}:${skill.name}`;
     setDeletingKey(key);
     setError(null);
     setNotice(null);
     try {
       await apiClient.deleteSkill(skill.scope, skill.name, state.workspacePath || undefined);
-      setPendingDeleteKey(null);
+      setPendingDeleteSkill(null);
       if (state.pinnedSkills.includes(skill.name)) {
         actions.unpinSkill(skill.name);
       }
@@ -290,6 +338,7 @@ export function SkillsDialog() {
       setNotice(`Removed "${skill.name}" from ${skill.scope} scope.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete skill");
+      setPendingDeleteSkill(null);
     } finally {
       setDeletingKey(null);
     }
@@ -337,8 +386,9 @@ export function SkillsDialog() {
   };
 
   return (
-    <Dialog
-      isOpen={state.skillsOpen}
+    <>
+      <Dialog
+        isOpen={state.skillsOpen}
       onOpenChange={(open) => {
         if (!open) actions.closeSkills();
       }}
@@ -437,8 +487,6 @@ export function SkillsDialog() {
                     ) : (
                       state.installedSkills.map((skill) => {
                         const key = `${skill.scope}:${skill.name}`;
-                        const isConfirming = pendingDeleteKey === key;
-                        const isDeleting = deletingKey === key;
                         const isPinned = state.pinnedSkills.includes(skill.name);
 
                         return (
@@ -475,33 +523,15 @@ export function SkillsDialog() {
                                     icon={<Icon icon={BookmarkIcon} size="sm" />}
                                     onClick={() => handlePinSkill(skill.name)}
                                   />
-                                  {skill.deletable &&
-                                    (isConfirming ? (
-                                      <HStack gap={1} vAlign="center">
-                                        <Button
-                                          label="Confirm Delete"
-                                          variant="destructive"
-                                          size="sm"
-                                          isLoading={isDeleting}
-                                          onClick={() => void handleConfirmDelete(skill)}
-                                        />
-                                        <Button
-                                          label="Cancel"
-                                          variant="ghost"
-                                          size="sm"
-                                          isDisabled={isDeleting}
-                                          onClick={() => setPendingDeleteKey(null)}
-                                        />
-                                      </HStack>
-                                    ) : (
-                                      <Button
-                                        label="Delete"
-                                        variant="ghost"
-                                        size="sm"
-                                        icon={<Icon icon={TrashIcon} size="sm" />}
-                                        onClick={() => setPendingDeleteKey(key)}
-                                      />
-                                    ))}
+                                  {skill.deletable && (
+                                    <Button
+                                      label="Delete"
+                                      variant="ghost"
+                                      size="sm"
+                                      icon={<Icon icon={TrashIcon} size="sm" />}
+                                      onClick={() => setPendingDeleteSkill(skill)}
+                                    />
+                                  )}
                                 </HStack>
                               </HStack>
 
@@ -687,6 +717,27 @@ export function SkillsDialog() {
           </LayoutFooter>
         }
       />
-    </Dialog>
+      </Dialog>
+
+      <AlertDialog
+        isOpen={pendingDeleteSkill !== null}
+        onOpenChange={(open) => {
+          if (!open && deletingKey === null) {
+            setPendingDeleteSkill(null);
+          }
+        }}
+        title={`Delete skill "${pendingDeleteSkill?.name ?? ""}"?`}
+        description={
+          pendingDeleteSkill
+            ? `This removes "${pendingDeleteSkill.name}" from ${pendingDeleteSkill.scope} scope. You can reinstall it later from skills.sh.`
+            : ""
+        }
+        cancelLabel="Cancel"
+        actionLabel="Delete Skill"
+        actionVariant="destructive"
+        isActionLoading={deletingKey !== null}
+        onAction={() => void handleConfirmDelete()}
+      />
+    </>
   );
 }

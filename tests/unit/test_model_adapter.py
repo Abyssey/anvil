@@ -19,6 +19,8 @@ def test_model_factory_builds_reasoning_chat_openai_with_no_sdk_retries_and_no_e
     assert isinstance(model, ReasoningChatOpenAI)
     assert model.max_retries == 0
     assert model.model_name == "qwen3.8-flash"
+    assert model.temperature == 0.2
+    assert model.top_p == 0.85
     assert model.extra_body == {"enable_thinking": True}
     assert model.http_client is not None
     assert model.http_async_client is not None
@@ -174,6 +176,60 @@ async def test_reasoning_chat_openai_falls_back_when_provider_rejects_enable_thi
     assert "enable_thinking" in calls[2]
     assert "enable_thinking" not in calls[3]
     assert stream_model.extra_body is None
+
+
+async def test_reasoning_chat_openai_falls_back_on_rejected_temperature_or_top_p() -> None:
+    import json
+
+    import httpx
+
+    calls: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content.decode("utf-8"))
+        calls.append(payload)
+        if "temperature" in payload or "top_p" in payload:
+            bad_param = "temperature" if "temperature" in payload else "top_p"
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "message": (
+                            f"Unsupported parameter: '{bad_param}' is not supported "
+                            "with this model."
+                        ),
+                        "type": "invalid_request_error",
+                        "param": bad_param,
+                    }
+                },
+            )
+        sse = (
+            'data: {"id":"c2","object":"chat.completion.chunk","model":"o3-mini",'
+            '"choices":[{"index":0,"delta":{"role":"assistant","content":"Fallback ok"},'
+            '"finish_reason":null}]}\n\n'
+            'data: {"id":"c2","object":"chat.completion.chunk","model":"o3-mini",'
+            '"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
+            "data: [DONE]\n\n"
+        )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=sse.encode("utf-8"),
+        )
+
+    creds = LLMCredentials(
+        base_url="http://localhost:8001/v1",
+        model="o3-mini",
+        api_key="sk-test-key",
+        enable_thinking=False,
+    )
+    factory = ModelFactory(http_transport=httpx.MockTransport(handler))
+    model = factory.build(creds)
+    chunks = [chunk async for chunk in model.astream("check fallback")]
+    streamed = "".join(c.content for c in chunks if isinstance(c.content, str))
+    assert streamed == "Fallback ok"
+    assert model.temperature is None  # type: ignore[attr-defined]
+    assert model.top_p is None  # type: ignore[attr-defined]
 
 
 async def test_model_factory_ping_llm_falls_back_and_redacts_api_key() -> None:

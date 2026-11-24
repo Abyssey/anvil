@@ -94,6 +94,49 @@ class WorkspaceInspector:
             directories=directories,
         )
 
+    async def create_directory(self, parent_path: str, name: str) -> WorkspaceInfo:
+        """Create a single child directory inside `parent_path` and return its WorkspaceInfo."""
+        parent = self._resolve_root(parent_path)
+        clean_name = name.strip()
+        if (
+            not clean_name
+            or clean_name in {".", ".."}
+            or "/" in clean_name
+            or "\\" in clean_name
+            or "\x00" in clean_name
+        ):
+            raise DomainError(
+                "Folder name must be a single valid directory name without path separators.",
+                status_code=400,
+                code="INVALID_DIRECTORY_NAME",
+            )
+        target = (parent / clean_name).resolve()
+        try:
+            target.relative_to(parent)
+        except ValueError as exc:
+            raise PathEscapeError(name) from exc
+        if target == parent:
+            raise DomainError(
+                "Folder name must not resolve to the parent directory.",
+                status_code=400,
+                code="INVALID_DIRECTORY_NAME",
+            )
+        if target.exists() and not target.is_dir():
+            raise DomainError(
+                f"A non-directory file already exists at '{target}'.",
+                status_code=409,
+                code="PATH_CONFLICT",
+            )
+        try:
+            await asyncio.to_thread(target.mkdir, parents=False, exist_ok=True)
+        except OSError as exc:
+            raise DomainError(
+                f"Unable to create directory '{clean_name}': {exc}",
+                status_code=400,
+                code="DIRECTORY_CREATE_FAILED",
+            ) from exc
+        return await self.validate_workspace(str(target))
+
     @staticmethod
     def _list_child_dirs(target: Path) -> list[DirectoryEntry]:
         entries: list[DirectoryEntry] = []

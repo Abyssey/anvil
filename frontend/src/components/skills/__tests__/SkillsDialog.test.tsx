@@ -1,5 +1,5 @@
 import { Theme } from "@astryxdesign/core/theme";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "../../../api/client";
 import type { InstalledSkill } from "../../../api/types";
@@ -180,10 +180,12 @@ describe("SkillsDialog", () => {
     // Return to skill list via Back to list
     fireEvent.click(screen.getByRole("button", { name: "Back to list" }));
 
-    // Inline delete confirmation
+    // AlertDialog delete confirmation
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
-    const confirmBtn = screen.getByRole("button", { name: "Confirm Delete" });
-    fireEvent.click(confirmBtn);
+    expect(deleteSpy).not.toHaveBeenCalled();
+    const deleteDialog = screen.getByRole("alertdialog");
+    expect(deleteDialog).toHaveTextContent(/react-patterns/);
+    fireEvent.click(within(deleteDialog).getByRole("button", { name: "Delete Skill" }));
 
     await waitFor(() => {
       expect(deleteSpy).toHaveBeenCalledWith("global", "react-patterns", "/repo");

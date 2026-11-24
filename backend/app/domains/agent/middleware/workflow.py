@@ -253,7 +253,13 @@ class ArtifactWorkflowMiddleware(AgentMiddleware[ArtifactWorkflowState, Any, Any
 
     @staticmethod
     def _last_assistant_text(state: ArtifactWorkflowState) -> str:
+        catalog = RunContext.current_or_none()
+        allowance = catalog.cjk_allowance if catalog is not None else None
         for msg in reversed(state.get("messages", [])):
             if isinstance(msg, AIMessage) and isinstance(msg.content, str) and msg.content.strip():
-                return msg.content.strip()
+                text = msg.content.strip()
+                if allowance is not None:
+                    text = allowance.strip_unallowed_cjk(text).strip()
+                if text:
+                    return text
         return ""
